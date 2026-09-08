@@ -5,11 +5,12 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow};
-use serde::Deserialize;
 use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 
-use crate::runtime::PageDefinition;
+#[cfg(test)]
+use crate::runtime::PluginRequest;
+use crate::runtime::{ComponentResponse, PageDefinition};
 
 const FUEL_PER_CALL: u64 = 10_000_000;
 const MAX_CACHED_COMPONENTS: usize = 16;
@@ -224,13 +225,6 @@ fn call_handler(
     serde_json::from_str(&json).map_err(|error| anyhow!("解析 Wasm Component 响应失败: {error}"))
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ComponentResponse {
-    pub status: u16,
-    pub content_type: String,
-    pub body: String,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,15 +276,14 @@ mod tests {
             "tenant-a",
             "source-a",
             &revision,
-            serde_json::json!({
-                "method": "POST",
-                "path": "/echo",
-                "query": null,
-                "body": "tenant scoped",
-                "tenant_id": "tenant-a",
-                "user_id": "user-a"
-            })
-            .to_string(),
+            serde_json::to_string(&PluginRequest::ServiceRequest {
+                method: "POST".to_owned(),
+                path: "/echo".to_owned(),
+                query: None,
+                body: "tenant scoped".to_owned(),
+                tenant_id: "tenant-a".to_owned(),
+                user_id: "user-a".to_owned(),
+            })?,
         )?;
         assert_eq!(response.status, 200);
         assert!(response.body.contains("tenant-a"));
@@ -300,21 +293,23 @@ mod tests {
                 tenant_id,
                 "source-a",
                 &revision,
-                serde_json::json!({
-                    "kind": "page_action",
-                    "page_id": "ts-counter",
-                    "action_id": "increment",
-                    "tenant_id": tenant_id,
-                    "user_id": "user-a",
-                    "body": {
-                        "kind": "actions",
-                        "title": "TypeScript Component",
-                        "content": format!("计数：{count}"),
-                        "state": { "count": count },
-                        "actions": [{ "id": "increment", "label": "TypeScript +1" }]
-                    }
-                })
-                .to_string(),
+                serde_json::to_string(&PluginRequest::PageAction {
+                    page_id: "ts-counter".to_owned(),
+                    action_id: "increment".to_owned(),
+                    tenant_id: tenant_id.to_owned(),
+                    user_id: "user-a".to_owned(),
+                    body: crate::runtime::PageBody::Actions {
+                        title: "TypeScript Component".to_owned(),
+                        content: format!("计数：{count}"),
+                        state: [("count".to_owned(), serde_json::json!(count))]
+                            .into_iter()
+                            .collect(),
+                        actions: vec![az_plugin_manifest::PageActionDefinition {
+                            id: "increment".to_owned(),
+                            label: "TypeScript +1".to_owned(),
+                        }],
+                    },
+                })?,
             )
         };
         let content = |response: ComponentResponse| -> Result<String> {

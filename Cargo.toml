@@ -11,7 +11,7 @@ dill = "0.15.0"
 dioxus = { version = "=0.7.9", default-features = false, features = ["macro", "html", "signals"], optional = true }
 az-dioxus-admin-shell = { git = "https://github.com/zjarlin/dioxus-admin-workbench.git", rev = "aa19101b1d0739a0c6f0df99677c1ba3483a746d", default-features = false, optional = true }
 az-ui-components = { git = "https://github.com/zjarlin/dioxus-admin-workbench.git", rev = "aa19101b1d0739a0c6f0df99677c1ba3483a746d", optional = true }
-az-plugin-manifest = { git = "https://github.com/zjarlin/aio.git", rev = "ecf79e8c04e6ee4a8ab477955b933a4bb0b167ae", default-features = false }
+az-plugin-manifest = { git = "https://github.com/zjarlin/aio.git", rev = "d7aa61a4e444b63e4693492455c6055da56fd719", default-features = false }
 gloo-net = { version = "0.6.0", features = ["http", "json"], optional = true }
 flate2 = { version = "1.1.2", optional = true }
 reqwest = { version = "0.12.23", default-features = false, features = ["json", "rustls-tls"], optional = true }

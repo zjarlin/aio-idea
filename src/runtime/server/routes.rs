@@ -21,7 +21,7 @@ use super::{
 };
 use crate::runtime::{
     InstallPluginRequest, MarketplaceEntry, PageActionRequest, PageActionResult, PageBody,
-    PageDefinition, RuntimeCatalog, RuntimeResponse,
+    PageDefinition, PluginRequest, RuntimeCatalog, RuntimeResponse,
 };
 
 pub fn router(state: RuntimeState) -> Router {
@@ -66,15 +66,14 @@ async fn page_action(
         .await?
         .ok_or_else(|| RuntimeError::not_found("当前租户没有提供该页面的活动插件"))?;
     ensure_page_action_allowed(&binding.page, &request.action_id, &session.permissions)?;
-    let event = serde_json::json!({
-        "kind": "page_action",
-        "page_id": request.page_id,
-        "action_id": request.action_id,
-        "tenant_id": session.tenant_id,
-        "user_id": session.user_id,
-        "body": &binding.page.body,
+    let event = serde_json::to_string(&PluginRequest::PageAction {
+        page_id: request.page_id.clone(),
+        action_id: request.action_id.clone(),
+        tenant_id: session.tenant_id.clone(),
+        user_id: session.user_id.clone(),
+        body: binding.page.body.clone(),
     })
-    .to_string();
+    .context("序列化页面动作请求失败")?;
     let result = match binding.service.runtime {
         crate::runtime::PluginRuntime::WasmComponent => {
             let manager = state.wasm.clone();
@@ -645,15 +644,15 @@ async fn service(
         crate::runtime::PluginRuntime::WasmComponent => {
             let body = String::from_utf8(body.to_vec())
                 .map_err(|_| RuntimeError::bad_request("Wasm Component 请求体必须是 UTF-8"))?;
-            let request = serde_json::json!({
-                "method": method.as_str(),
-                "path": path,
-                "query": uri.query(),
-                "body": body,
-                "tenant_id": session.tenant_id,
-                "user_id": session.user_id,
+            let request = serde_json::to_string(&PluginRequest::ServiceRequest {
+                method: method.as_str().to_owned(),
+                path,
+                query: uri.query().map(str::to_owned),
+                body,
+                tenant_id: session.tenant_id.clone(),
+                user_id: session.user_id.clone(),
             })
-            .to_string();
+            .context("序列化 Wasm 服务请求失败")?;
             let manager = state.wasm.clone();
             let tenant_id = session.tenant_id.clone();
             let revision = binding.revision.clone();

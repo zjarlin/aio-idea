@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "server")]
+pub use az_plugin_manifest::{ComponentResponse, PluginRequest};
 pub use az_plugin_manifest::{PageActionResult, PageBody, PageDefinition, PluginRuntime};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
