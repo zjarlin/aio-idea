@@ -33,11 +33,15 @@ git -C "$repository" worktree add --detach "$workspace/source" "$revision"
 git -C "$workspace/source" submodule update --init --recursive
 
 cd "$workspace/source"
-export CARGO_TARGET_DIR="$workspace/target"
+export CARGO_TARGET_DIR="$workspace/source/target"
 
+print "验证服务端"
 cargo test --no-default-features --features server
+print "检查 Web 客户端"
 cargo check --no-default-features --features web
+print "构建 glibc 2.17 服务端"
 cargo zigbuild --release --target "$target" --no-default-features --features server
+print "构建 Web 资产"
 dx build --platform web --release
 
 readonly release="$artifact/release"
@@ -53,8 +57,10 @@ ssh "$deploy_host" "set -euo pipefail
 test ! -e '$remote_release'
 rm -rf '$incoming'
 mkdir -p '$incoming'"
+print "上传候选发布物"
 tar -C "$release" -cf - . | ssh "$deploy_host" "tar -C '$incoming' -xf -"
 
+print "切换 252 发布物"
 ssh "$deploy_host" "set -euo pipefail
 deploy_root='$deploy_root'
 incoming='$incoming'
