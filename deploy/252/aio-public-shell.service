@@ -16,7 +16,7 @@ RestartSec=2
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
-ProtectSystem=strict
+ProtectSystem=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
