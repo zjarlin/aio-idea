@@ -22,7 +22,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=true
-ReadWritePaths=/opt/aio-public-shell/plugin-cache
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
