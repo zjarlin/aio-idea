@@ -28,6 +28,10 @@ pub fn router(state: RuntimeState) -> Router {
         .route("/api/runtime/marketplace", get(marketplace))
         .route("/api/runtime/registries", post(add_registry))
         .route("/api/runtime/plugins/install", post(install))
+        .route(
+            "/api/runtime/plugins/{source_id}/events",
+            get(lifecycle_events),
+        )
         .route("/api/runtime/services/{source_id}/{*path}", any(service))
         .route("/api/runtime/plugins/{source_id}/enable", post(enable))
         .route("/api/runtime/plugins/{source_id}/disable", post(disable))
@@ -61,6 +65,16 @@ async fn install(
         discovered.source_id = source_id;
     }
     let current_revision = discovered.revision.clone();
+    state
+        .store
+        .record_lifecycle_event(
+            &session.tenant_id,
+            &discovered.source_id,
+            None,
+            "validate",
+            "已校验 Git 完整提交、清单和预构建 artifact",
+        )
+        .await?;
     let previous = state
         .store
         .active_process(&session.tenant_id, &discovered.source_id)
@@ -80,15 +94,61 @@ async fn install(
         .active_wasm_revision(&session.tenant_id, &discovered.source_id)
         .await?;
     let instance = if discovered.runtime == crate::runtime::PluginRuntime::Process {
-        Some(prepare_process(&state, &session.tenant_id, &mut discovered).await?)
+        Some(
+            match prepare_process(&state, &session.tenant_id, &mut discovered).await {
+                Ok(instance) => instance,
+                Err(error) => {
+                    let _ = state
+                        .store
+                        .record_lifecycle_event(
+                            &session.tenant_id,
+                            &discovered.source_id,
+                            None,
+                            "failed",
+                            &format!("process 健康检查失败: {error:#}"),
+                        )
+                        .await;
+                    return Err(error.into());
+                }
+            },
+        )
     } else {
         None
     };
     let wasm = if discovered.runtime == crate::runtime::PluginRuntime::WasmComponent {
-        Some(prepare_wasm(&state, &session.tenant_id, &mut discovered).await?)
+        Some(
+            match prepare_wasm(&state, &session.tenant_id, &mut discovered).await {
+                Ok(activation) => activation,
+                Err(error) => {
+                    let _ = state
+                        .store
+                        .record_lifecycle_event(
+                            &session.tenant_id,
+                            &discovered.source_id,
+                            None,
+                            "failed",
+                            &format!("Wasm Component 健康检查失败: {error:#}"),
+                        )
+                        .await;
+                    return Err(error.into());
+                }
+            },
+        )
     } else {
         None
     };
+    if instance.is_some() || wasm.is_some() {
+        state
+            .store
+            .record_lifecycle_event(
+                &session.tenant_id,
+                &discovered.source_id,
+                None,
+                "health-check",
+                "运行时健康检查通过",
+            )
+            .await?;
+    }
     let source_id = discovered.source_id.clone();
     if let Err(error) = stop_previous_process(&state, previous, instance.as_ref()).await {
         let _ = cleanup_new_process(&state, instance.as_ref()).await;
@@ -389,6 +449,19 @@ async fn marketplace(
         }
     }
     Ok(Json(RuntimeResponse { data: entries }))
+}
+
+async fn lifecycle_events(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path(source_id): Path<String>,
+) -> Result<Json<RuntimeResponse<Vec<crate::runtime::PluginLifecycleEvent>>>, RuntimeError> {
+    let session = authenticate_manager(&state, &headers).await?;
+    let events = state
+        .store
+        .lifecycle_events(&session.tenant_id, &source_id)
+        .await?;
+    Ok(Json(RuntimeResponse { data: events }))
 }
 
 fn unlisted_entry(plugin: &crate::runtime::InstalledPluginView) -> MarketplaceEntry {

@@ -77,7 +77,7 @@ dependencies = [
 [[package]]
 name = "aio-plugin-marketplace-client"
 version = "0.1.0"
-source = "git+https://github.com/zjarlin/aio-plugin-marketplace.git?rev=98445df180dcb42c20673f54b8098a3837094d8f#98445df180dcb42c20673f54b8098a3837094d8f"
+source = "git+https://github.com/zjarlin/aio-plugin-marketplace.git?rev=700ac6a38a32d2435215e2931f02123aa18afe6c#700ac6a38a32d2435215e2931f02123aa18afe6c"
 dependencies = [
  "az-dioxus-admin-shell",
  "az-ui-components",
@@ -91,7 +91,7 @@ dependencies = [
 [[package]]
 name = "aio-plugin-marketplace-server"
 version = "0.1.0"
-source = "git+https://github.com/zjarlin/aio-plugin-marketplace.git?rev=98445df180dcb42c20673f54b8098a3837094d8f#98445df180dcb42c20673f54b8098a3837094d8f"
+source = "git+https://github.com/zjarlin/aio-plugin-marketplace.git?rev=700ac6a38a32d2435215e2931f02123aa18afe6c#700ac6a38a32d2435215e2931f02123aa18afe6c"
 dependencies = [
  "anyhow",
  "axum",
@@ -7664,7 +7664,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

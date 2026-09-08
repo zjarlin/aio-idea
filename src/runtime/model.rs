@@ -38,6 +38,15 @@ pub struct RuntimeAccountItem {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg(feature = "server")]
+pub struct PluginLifecycleEvent {
+    pub id: String,
+    pub lifecycle: String,
+    pub detail: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InstalledPluginView {
     pub source_id: String,
     pub git: String,

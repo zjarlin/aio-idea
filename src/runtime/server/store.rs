@@ -5,8 +5,8 @@ use sqlx::{PgPool, Row};
 
 use super::{repository::DiscoveredPlugin, supervisor::ProcessInstance};
 use crate::runtime::{
-    InstalledPluginView, PageDefinition, PluginRuntime, PluginState, RuntimeAccountItem,
-    RuntimeCatalog, TenantView, UserView,
+    InstalledPluginView, PageDefinition, PluginLifecycleEvent, PluginRuntime, PluginState,
+    RuntimeAccountItem, RuntimeCatalog, TenantView, UserView,
 };
 
 const SCHEMA: &str = r#"
@@ -129,6 +129,52 @@ impl PluginStore {
             .fetch_optional(&self.pool)
             .await
             .map_err(Into::into)
+    }
+
+    pub async fn record_lifecycle_event(
+        &self,
+        tenant_id: &str,
+        source_id: &str,
+        revision_id: Option<&str>,
+        lifecycle: &str,
+        detail: &str,
+    ) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        record_event(
+            &mut transaction,
+            tenant_id,
+            source_id,
+            revision_id,
+            lifecycle,
+            detail,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn lifecycle_events(
+        &self,
+        tenant_id: &str,
+        source_id: &str,
+    ) -> Result<Vec<PluginLifecycleEvent>> {
+        let rows = sqlx::query(
+            "SELECT id, lifecycle, detail, created_at::TEXT AS created_at FROM plugin_lifecycle_events WHERE tenant_id = $1 AND source_id = $2 ORDER BY created_at DESC LIMIT 20",
+        )
+        .bind(tenant_id)
+        .bind(source_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(PluginLifecycleEvent {
+                    id: row.try_get("id")?,
+                    lifecycle: row.try_get("lifecycle")?,
+                    detail: row.try_get("detail")?,
+                    created_at: row.try_get("created_at")?,
+                })
+            })
+            .collect()
     }
 
     pub async fn activate(
