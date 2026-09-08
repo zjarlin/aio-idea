@@ -12,8 +12,9 @@ use serde::Deserialize;
 
 use super::RuntimeState;
 use super::lifecycle::{
-    cleanup_new_wasm, deactivate_bound_wasm, deactivate_previous_wasm, prepare_bound_wasm,
-    prepare_process, prepare_process_revision, prepare_wasm, stop_previous_process,
+    cleanup_new_process, cleanup_new_wasm, deactivate_bound_wasm, deactivate_previous_wasm,
+    prepare_bound_wasm, prepare_process, prepare_process_revision, prepare_wasm,
+    restore_process_binding, stop_previous_process,
 };
 use crate::runtime::{
     InstallPluginRequest, MarketplaceEntry, RuntimeCatalog, RuntimeResponse, UserView,
@@ -64,6 +65,16 @@ async fn install(
         .store
         .active_process(&session.tenant_id, &discovered.source_id)
         .await?;
+    let previous_target = if previous.is_some() {
+        Some(
+            state
+                .store
+                .bound_runtime(&session.tenant_id, &discovered.source_id)
+                .await?,
+        )
+    } else {
+        None
+    };
     let previous_wasm = state
         .store
         .active_wasm_revision(&session.tenant_id, &discovered.source_id)
@@ -79,26 +90,45 @@ async fn install(
         None
     };
     let source_id = discovered.source_id.clone();
-    if let Err(error) = state
-        .store
-        .activate(&session.tenant_id, discovered, instance.as_ref())
-        .await
-    {
-        if let Some(instance) = &instance
-            && instance.created
-        {
-            let _ = state.process.stop(&instance.instance_id).await;
-        }
-        cleanup_new_wasm(
+    if let Err(error) = stop_previous_process(&state, previous, instance.as_ref()).await {
+        let _ = cleanup_new_process(&state, instance.as_ref()).await;
+        let _ = cleanup_new_wasm(
             &state,
             &session.tenant_id,
             &source_id,
             &current_revision,
             wasm.as_ref(),
-        )?;
+        );
         return Err(error.into());
     }
-    stop_previous_process(&state, previous, instance.as_ref()).await?;
+    if let Err(error) = state
+        .store
+        .activate(&session.tenant_id, discovered, instance.as_ref())
+        .await
+    {
+        let _ = cleanup_new_process(&state, instance.as_ref()).await;
+        let _ = cleanup_new_wasm(
+            &state,
+            &session.tenant_id,
+            &source_id,
+            &current_revision,
+            wasm.as_ref(),
+        );
+        if let Err(recovery) = restore_process_binding(
+            &state,
+            &session.tenant_id,
+            &source_id,
+            previous_target.as_ref(),
+        )
+        .await
+        {
+            return Err(anyhow::anyhow!(
+                "激活插件失败: {error:#}; 恢复旧 process 插件失败: {recovery:#}"
+            )
+            .into());
+        }
+        return Err(error.into());
+    }
     deactivate_previous_wasm(
         &state,
         &session.tenant_id,
@@ -138,18 +168,14 @@ async fn enable(
         .set_enabled(&session.tenant_id, &source_id, true, instance.as_ref())
         .await
     {
-        if let Some(instance) = &instance
-            && instance.created
-        {
-            let _ = state.process.stop(&instance.instance_id).await;
-        }
-        cleanup_new_wasm(
+        let _ = cleanup_new_process(&state, instance.as_ref()).await;
+        let _ = cleanup_new_wasm(
             &state,
             &session.tenant_id,
             &source_id,
             &target.revision,
             wasm.as_ref(),
-        )?;
+        );
         return Err(error.into());
     }
     catalog_for(&state, &session).await
@@ -169,12 +195,23 @@ async fn disable(
         .store
         .bound_runtime(&session.tenant_id, &source_id)
         .await?;
-    state
+    if let Err(error) = stop_previous_process(&state, previous, None).await {
+        return Err(error.into());
+    }
+    if let Err(error) = state
         .store
         .set_enabled(&session.tenant_id, &source_id, false, None)
-        .await?;
-    if let Some(previous) = previous {
-        state.process.stop(&previous.instance_id).await?;
+        .await
+    {
+        if let Err(recovery) =
+            restore_process_binding(&state, &session.tenant_id, &source_id, Some(&target)).await
+        {
+            return Err(anyhow::anyhow!(
+                "停用插件失败: {error:#}; 恢复旧 process 插件失败: {recovery:#}"
+            )
+            .into());
+        }
+        return Err(error.into());
     }
     deactivate_bound_wasm(&state, &session.tenant_id, &source_id, &target)?;
     catalog_for(&state, &session).await
@@ -194,12 +231,19 @@ async fn uninstall(
         .store
         .bound_runtime(&session.tenant_id, &source_id)
         .await?;
-    state
-        .store
-        .uninstall(&session.tenant_id, &source_id)
-        .await?;
-    if let Some(previous) = previous {
-        state.process.stop(&previous.instance_id).await?;
+    if let Err(error) = stop_previous_process(&state, previous, None).await {
+        return Err(error.into());
+    }
+    if let Err(error) = state.store.uninstall(&session.tenant_id, &source_id).await {
+        if let Err(recovery) =
+            restore_process_binding(&state, &session.tenant_id, &source_id, Some(&target)).await
+        {
+            return Err(anyhow::anyhow!(
+                "卸载插件失败: {error:#}; 恢复旧 process 插件失败: {recovery:#}"
+            )
+            .into());
+        }
+        return Err(error.into());
     }
     deactivate_bound_wasm(&state, &session.tenant_id, &source_id, &target)?;
     catalog_for(&state, &session).await
@@ -215,6 +259,16 @@ async fn rollback(
         .store
         .active_process(&session.tenant_id, &source_id)
         .await?;
+    let previous_target = if previous.is_some() {
+        Some(
+            state
+                .store
+                .bound_runtime(&session.tenant_id, &source_id)
+                .await?,
+        )
+    } else {
+        None
+    };
     let previous_wasm = state
         .store
         .active_wasm_revision(&session.tenant_id, &source_id)
@@ -237,26 +291,45 @@ async fn rollback(
     } else {
         None
     };
-    if let Err(error) = state
-        .store
-        .rollback_to(&session.tenant_id, &source_id, &target, instance.as_ref())
-        .await
-    {
-        if let Some(instance) = &instance
-            && instance.created
-        {
-            let _ = state.process.stop(&instance.instance_id).await;
-        }
-        cleanup_new_wasm(
+    if let Err(error) = stop_previous_process(&state, previous, instance.as_ref()).await {
+        let _ = cleanup_new_process(&state, instance.as_ref()).await;
+        let _ = cleanup_new_wasm(
             &state,
             &session.tenant_id,
             &source_id,
             &target.revision,
             wasm.as_ref(),
-        )?;
+        );
         return Err(error.into());
     }
-    stop_previous_process(&state, previous, instance.as_ref()).await?;
+    if let Err(error) = state
+        .store
+        .rollback_to(&session.tenant_id, &source_id, &target, instance.as_ref())
+        .await
+    {
+        let _ = cleanup_new_process(&state, instance.as_ref()).await;
+        let _ = cleanup_new_wasm(
+            &state,
+            &session.tenant_id,
+            &source_id,
+            &target.revision,
+            wasm.as_ref(),
+        );
+        if let Err(recovery) = restore_process_binding(
+            &state,
+            &session.tenant_id,
+            &source_id,
+            previous_target.as_ref(),
+        )
+        .await
+        {
+            return Err(anyhow::anyhow!(
+                "回滚插件失败: {error:#}; 恢复旧 process 插件失败: {recovery:#}"
+            )
+            .into());
+        }
+        return Err(error.into());
+    }
     deactivate_previous_wasm(
         &state,
         &session.tenant_id,

@@ -501,6 +501,35 @@ impl PluginStore {
         Ok(())
     }
 
+    pub async fn restore_process_instance(
+        &self,
+        tenant_id: &str,
+        source_id: &str,
+        target: &BoundRuntime,
+        instance: &ProcessInstance,
+    ) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        stop_instances(&mut transaction, tenant_id, source_id).await?;
+        start_instance(
+            &mut transaction,
+            tenant_id,
+            &target.revision_id,
+            Some(instance),
+        )
+        .await?;
+        record_event(
+            &mut transaction,
+            tenant_id,
+            source_id,
+            Some(&target.revision_id),
+            "restore",
+            "数据库切换失败后已恢复原 process 插件实例",
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
     pub async fn recover_wasm_instance(&self, target: &WasmTarget) -> Result<()> {
         let mut transaction = self.pool.begin().await?;
         stop_instances(&mut transaction, &target.tenant_id, &target.source_id).await?;

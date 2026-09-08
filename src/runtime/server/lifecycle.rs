@@ -166,3 +166,37 @@ pub(super) async fn stop_previous_process(
     }
     Ok(())
 }
+
+pub(super) async fn cleanup_new_process(
+    state: &RuntimeState,
+    instance: Option<&ProcessInstance>,
+) -> anyhow::Result<()> {
+    if let Some(instance) = instance
+        && instance.created
+    {
+        state.process.stop(&instance.instance_id).await?;
+    }
+    Ok(())
+}
+
+pub(super) async fn restore_process_binding(
+    state: &RuntimeState,
+    tenant_id: &str,
+    source_id: &str,
+    target: Option<&BoundRuntime>,
+) -> anyhow::Result<()> {
+    let Some(target) = target else {
+        return Ok(());
+    };
+    if target.runtime != PluginRuntime::Process {
+        return Ok(());
+    }
+    let instance = state
+        .process
+        .start(tenant_id, source_id, &target.revision)
+        .await?;
+    state
+        .store
+        .restore_process_instance(tenant_id, source_id, target, &instance)
+        .await
+}
