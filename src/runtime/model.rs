@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 pub use az_plugin_manifest::{PageActionResult, PageBody, PageDefinition, PluginRuntime};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PageActionRequest {
     pub page_id: String,
     pub action_id: String,
@@ -98,4 +99,18 @@ pub struct MarketplaceEntry {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeResponse<T> {
     pub data: T,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PageActionRequest;
+
+    #[test]
+    fn page_action_request_rejects_spoofed_context() {
+        let result = serde_json::from_str::<PageActionRequest>(
+            r#"{"page_id":"counter","action_id":"increment","tenant_id":"spoofed"}"#,
+        );
+
+        assert!(result.is_err());
+    }
 }
