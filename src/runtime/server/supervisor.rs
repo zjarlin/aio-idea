@@ -401,7 +401,9 @@ fn ignore_missing(result: Result<String>) -> Result<()> {
 
 fn missing_docker_object(error: &anyhow::Error) -> bool {
     let message = error.to_string().to_ascii_lowercase();
-    message.contains("no such container") || message.contains("no such network")
+    message.contains("no such container")
+        || message.contains("no such network")
+        || message.contains("no such object")
 }
 
 fn truncate(value: &str) -> String {
@@ -494,5 +496,16 @@ mod tests {
         second.tenant_id = "another".to_owned();
         assert_eq!(instance_id(&first), instance_id(&first));
         assert_ne!(instance_id(&first), instance_id(&second));
+    }
+
+    #[test]
+    fn accepts_docker_missing_object_variants() {
+        for message in [
+            "Error: No such container: example",
+            "Error: No such network: example",
+            "Error: No such object: example",
+        ] {
+            assert!(missing_docker_object(&anyhow::anyhow!(message)));
+        }
     }
 }
