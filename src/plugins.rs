@@ -53,3 +53,42 @@ pub fn server_router(catalog: &dill::Catalog) -> anyhow::Result<axum::Router> {
     router = router.merge(aio_plugin_tenant_server::router(catalog).context("装配租户插件失败")?);
     Ok(router)
 }
+
+#[cfg(all(test, any(feature = "web", feature = "desktop")))]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::client_catalog;
+
+    #[test]
+    fn system_plugins_contribute_navigation_and_account_surface() -> anyhow::Result<()> {
+        let catalog = client_catalog()?;
+        let page_ids = catalog
+            .pages
+            .iter()
+            .map(|page| page.id)
+            .collect::<HashSet<_>>();
+        let account_ids = catalog
+            .account_items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<HashSet<_>>();
+
+        for page_id in ["home", "profile", "settings", "marketplace", "tenants"] {
+            assert!(page_ids.contains(page_id), "缺少系统页面: {page_id}");
+        }
+        for account_id in [
+            "profile",
+            "settings",
+            "marketplace",
+            "tenant-switcher",
+            "logout",
+        ] {
+            assert!(
+                account_ids.contains(account_id),
+                "缺少账户入口: {account_id}"
+            );
+        }
+        Ok(())
+    }
+}
