@@ -71,6 +71,7 @@ async fn page_action(
         "action_id": request.action_id,
         "tenant_id": session.tenant_id,
         "user_id": session.user_id,
+        "body": &binding.page.body,
     })
     .to_string();
     let result = match binding.service.runtime {
@@ -126,6 +127,17 @@ async fn page_action(
         _ => return Err(RuntimeError::bad_request("当前页面运行时不支持动作")),
     };
     validate_page_action_result(&binding.page, &result)?;
+    state
+        .store
+        .save_page_state(
+            &session.tenant_id,
+            &binding.source_id,
+            &binding.revision_id,
+            &request.page_id,
+            binding.state_generation,
+            &result.body,
+        )
+        .await?;
     Ok(Json(RuntimeResponse { data: result }))
 }
 
@@ -871,6 +883,9 @@ mod tests {
             body: PageBody::Actions {
                 title: "Counter".to_owned(),
                 content: "0".to_owned(),
+                state: [("count".to_owned(), serde_json::json!(0))]
+                    .into_iter()
+                    .collect(),
                 actions: vec![PageActionDefinition {
                     id: "increment".to_owned(),
                     label: "+1".to_owned(),
@@ -931,6 +946,9 @@ mod tests {
             body: PageBody::Actions {
                 title: "Counter".to_owned(),
                 content: "1".to_owned(),
+                state: [("count".to_owned(), serde_json::json!(1))]
+                    .into_iter()
+                    .collect(),
                 actions: vec![PageActionDefinition {
                     id: "increment".to_owned(),
                     label: "+1".to_owned(),
@@ -943,6 +961,9 @@ mod tests {
             body: PageBody::Actions {
                 title: "Counter".to_owned(),
                 content: "1".to_owned(),
+                state: [("count".to_owned(), serde_json::json!(1))]
+                    .into_iter()
+                    .collect(),
                 actions: vec![PageActionDefinition {
                     id: "reset".to_owned(),
                     label: "Reset".to_owned(),

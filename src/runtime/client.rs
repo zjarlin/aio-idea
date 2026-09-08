@@ -41,6 +41,7 @@ fn RuntimePage(page: ApplicationRuntimePage) -> Element {
             title,
             content,
             actions,
+            ..
         }) => rsx! {
             RuntimeActions {
                 page_id: page.id,

@@ -3,7 +3,7 @@ use az_plugin_manifest::PluginManifest;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 
-use super::{repository::DiscoveredPlugin, supervisor::ProcessInstance};
+use super::{page_state, repository::DiscoveredPlugin, supervisor::ProcessInstance};
 use crate::runtime::{
     InstalledPluginView, PageDefinition, PluginLifecycleEvent, PluginRuntime, PluginState,
     RuntimeAccountItem, RuntimeCatalog, TenantView, UserView,
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS plugin_registries (
 "#;
 
 pub struct PluginStore {
-    pool: PgPool,
+    pub(super) pool: PgPool,
 }
 
 pub struct ProcessBinding {
@@ -87,6 +87,8 @@ pub struct ServiceBinding {
 
 pub struct PageServiceBinding {
     pub source_id: String,
+    pub revision_id: String,
+    pub state_generation: Option<i64>,
     pub page: PageDefinition,
     pub service: ServiceBinding,
 }
@@ -116,6 +118,7 @@ impl PluginStore {
             .execute(&self.pool)
             .await
             .context("创建插件运行时表失败")?;
+        page_state::migrate(&self.pool).await?;
         Ok(())
     }
 
@@ -244,7 +247,7 @@ impl PluginStore {
         user: UserView,
     ) -> Result<RuntimeCatalog> {
         let rows = sqlx::query(
-            "SELECT sources.id, sources.git, revisions.revision, revisions.runtime, revisions.manifest, revisions.pages, bindings.enabled FROM tenant_plugin_bindings bindings JOIN plugin_sources sources ON sources.id = bindings.source_id JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.tenant_id = $1 ORDER BY sources.git",
+            "SELECT sources.id, sources.git, revisions.id AS revision_id, revisions.revision, revisions.runtime, revisions.manifest, revisions.pages, bindings.enabled FROM tenant_plugin_bindings bindings JOIN plugin_sources sources ON sources.id = bindings.source_id JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.tenant_id = $1 ORDER BY sources.git",
         )
         .bind(tenant_id)
         .fetch_all(&self.pool)
@@ -257,7 +260,10 @@ impl PluginStore {
             let enabled: bool = row.try_get("enabled")?;
             let value: Value = row.try_get("pages")?;
             if enabled {
-                let plugin_pages = serde_json::from_value::<Vec<PageDefinition>>(value)?;
+                let revision_id: String = row.try_get("revision_id")?;
+                let mut plugin_pages = serde_json::from_value::<Vec<PageDefinition>>(value)?;
+                self.overlay_page_states(tenant_id, &revision_id, &mut plugin_pages)
+                    .await?;
                 let manifest = serde_json::from_value::<PluginManifest>(row.try_get("manifest")?)
                     .context("解析已安装插件清单失败")?;
                 account_items.extend(runtime_account_items(&source_id, &manifest, &plugin_pages)?);
@@ -319,6 +325,7 @@ impl PluginStore {
     pub async fn uninstall(&self, tenant_id: &str, source_id: &str) -> Result<()> {
         let mut transaction = self.pool.begin().await?;
         stop_instances(&mut transaction, tenant_id, source_id).await?;
+        page_state::delete_source_states(&mut transaction, tenant_id, source_id).await?;
         let result = sqlx::query(
             "DELETE FROM tenant_plugin_bindings WHERE tenant_id = $1 AND source_id = $2",
         )
@@ -432,14 +439,18 @@ impl PluginStore {
         page_id: &str,
     ) -> Result<Option<PageServiceBinding>> {
         let rows = sqlx::query(
-            "SELECT sources.id AS source_id, revisions.revision, revisions.runtime, revisions.manifest, revisions.pages, instances.endpoint FROM tenant_plugin_bindings bindings JOIN plugin_sources sources ON sources.id = bindings.source_id JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id LEFT JOIN LATERAL (SELECT endpoint FROM plugin_runtime_instances WHERE tenant_id = bindings.tenant_id AND revision_id = revisions.id AND state = 'active' ORDER BY started_at DESC LIMIT 1) instances ON TRUE WHERE bindings.tenant_id = $1 AND bindings.enabled = TRUE AND revisions.runtime IN ('wasm-component', 'process') ORDER BY sources.id",
+            "SELECT sources.id AS source_id, revisions.id AS revision_id, revisions.revision, revisions.runtime, revisions.manifest, revisions.pages, instances.endpoint FROM tenant_plugin_bindings bindings JOIN plugin_sources sources ON sources.id = bindings.source_id JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id LEFT JOIN LATERAL (SELECT endpoint FROM plugin_runtime_instances WHERE tenant_id = bindings.tenant_id AND revision_id = revisions.id AND state = 'active' ORDER BY started_at DESC LIMIT 1) instances ON TRUE WHERE bindings.tenant_id = $1 AND bindings.enabled = TRUE AND revisions.runtime IN ('wasm-component', 'process') ORDER BY sources.id",
         )
         .bind(tenant_id)
         .fetch_all(&self.pool)
         .await?;
         let mut binding = None;
         for row in rows {
-            let pages = serde_json::from_value::<Vec<PageDefinition>>(row.try_get("pages")?)?;
+            let revision_id: String = row.try_get("revision_id")?;
+            let mut pages = serde_json::from_value::<Vec<PageDefinition>>(row.try_get("pages")?)?;
+            let generations = self
+                .overlay_page_states(tenant_id, &revision_id, &mut pages)
+                .await?;
             let Some(page) = pages.into_iter().find(|page| page.id == page_id) else {
                 continue;
             };
@@ -447,6 +458,8 @@ impl PluginStore {
             let manifest = serde_json::from_value::<PluginManifest>(row.try_get("manifest")?)?;
             binding = Some(PageServiceBinding {
                 source_id: row.try_get("source_id")?,
+                revision_id,
+                state_generation: generations.get(page_id).copied(),
                 page,
                 service: ServiceBinding {
                     runtime: parse_runtime(row.try_get("runtime")?)?,
@@ -747,47 +760,5 @@ fn parse_runtime(value: String) -> Result<PluginRuntime> {
 }
 
 #[cfg(test)]
-mod tests {
-    use anyhow::Result;
-    use az_plugin_manifest::{PageBody, SceneDefinition, SubpluginManifest};
-
-    use super::*;
-
-    #[test]
-    fn derives_account_item_from_declared_runtime_page() -> Result<()> {
-        let manifest = PluginManifest {
-            subplugins: vec![SubpluginManifest {
-                id: "profile".to_owned(),
-                dependencies: Vec::new(),
-                pages: vec!["profile".to_owned()],
-                routes: Vec::new(),
-                account_actions: vec!["profile".to_owned()],
-            }],
-            ..PluginManifest::default()
-        };
-        let pages = vec![PageDefinition {
-            id: "profile".to_owned(),
-            label: "个人资料".to_owned(),
-            icon: Some("user".to_owned()),
-            scene: SceneDefinition {
-                id: "account".to_owned(),
-                label: "账户".to_owned(),
-            },
-            required_permission: Some("profile:view".to_owned()),
-            body: PageBody::Text {
-                title: "个人资料".to_owned(),
-                content: "内容".to_owned(),
-            },
-        }];
-
-        let items = runtime_account_items("source", &manifest, &pages)?;
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].id, "source:profile");
-        assert_eq!(items[0].page_id, "profile");
-        assert_eq!(
-            items[0].required_permission.as_deref(),
-            Some("profile:view")
-        );
-        Ok(())
-    }
-}
+#[path = "store_tests.rs"]
+mod tests;

@@ -295,7 +295,7 @@ mod tests {
         assert_eq!(response.status, 200);
         assert!(response.body.contains("tenant-a"));
 
-        let action = |tenant_id: &str| {
+        let action = |tenant_id: &str, count: u64| {
             manager.handle(
                 tenant_id,
                 "source-a",
@@ -305,7 +305,14 @@ mod tests {
                     "page_id": "ts-counter",
                     "action_id": "increment",
                     "tenant_id": tenant_id,
-                    "user_id": "user-a"
+                    "user_id": "user-a",
+                    "body": {
+                        "kind": "actions",
+                        "title": "TypeScript Component",
+                        "content": format!("计数：{count}"),
+                        "state": { "count": count },
+                        "actions": [{ "id": "increment", "label": "TypeScript +1" }]
+                    }
                 })
                 .to_string(),
             )
@@ -317,9 +324,9 @@ mod tests {
             };
             Ok(content)
         };
-        assert_eq!(content(action("tenant-a")?)?, "计数：1");
-        assert_eq!(content(action("tenant-b")?)?, "计数：1");
-        assert_eq!(content(action("tenant-a")?)?, "计数：2");
+        assert_eq!(content(action("tenant-a", 0)?)?, "计数：1");
+        assert_eq!(content(action("tenant-b", 0)?)?, "计数：1");
+        assert_eq!(content(action("tenant-a", 1)?)?, "计数：2");
 
         assert!(manager.deactivate("tenant-a", "source-a", &revision)?);
         assert_eq!(manager.active_instances()?, 1);
