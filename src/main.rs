@@ -32,7 +32,9 @@ fn main() {
 #[cfg(any(feature = "web", feature = "desktop"))]
 #[allow(non_snake_case)]
 fn App() -> dioxus::prelude::Element {
-    use az_dioxus_admin_shell::{ApplicationRuntimePage, ApplicationUser, PluginApplication};
+    use az_dioxus_admin_shell::{
+        ApplicationAccountItem, ApplicationRuntimePage, ApplicationUser, PluginApplication,
+    };
     use dioxus::prelude::*;
 
     let application = use_resource(|| async {
@@ -65,6 +67,30 @@ fn App() -> dioxus::prelude::Element {
             .as_deref()
             .is_none_or(|permission| session.permissions.iter().any(|value| value == permission))
     });
+    let mut account_items = static_plugins.account_items;
+    account_items.extend(
+        catalog
+            .account_items
+            .into_iter()
+            .filter(|item| {
+                item.required_permission
+                    .as_deref()
+                    .is_none_or(|permission| {
+                        session
+                            .permissions
+                            .iter()
+                            .any(|candidate| candidate == permission)
+                    })
+            })
+            .map(|item| ApplicationAccountItem {
+                id: item.id,
+                label: item.label,
+                icon: item.icon,
+                page_id: Some(item.page_id),
+                required_permission: item.required_permission,
+                destructive: false,
+            }),
+    );
     let runtime_pages = catalog
         .pages
         .into_iter()
@@ -82,7 +108,7 @@ fn App() -> dioxus::prelude::Element {
         PluginApplication {
             application_label: "AIO",
             pages: static_plugins.pages,
-            account_items: static_plugins.account_items,
+            account_items,
             runtime_pages,
             render_runtime_page: runtime::client::render_page,
             on_account_action: runtime::client::account_action,

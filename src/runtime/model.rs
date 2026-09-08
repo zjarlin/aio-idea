@@ -9,6 +9,8 @@ pub struct RuntimeCatalog {
     pub tenant: TenantView,
     pub user: UserView,
     pub pages: Vec<PageDefinition>,
+    #[serde(default)]
+    pub account_items: Vec<RuntimeAccountItem>,
     pub plugins: Vec<InstalledPluginView>,
 }
 
@@ -23,6 +25,16 @@ pub struct UserView {
     pub label: String,
     pub handle: String,
     pub initials: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeAccountItem {
+    pub id: String,
+    pub label: String,
+    pub icon: Option<String>,
+    pub page_id: String,
+    #[serde(default)]
+    pub required_permission: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

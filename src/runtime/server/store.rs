@@ -5,8 +5,8 @@ use sqlx::{PgPool, Row};
 
 use super::{repository::DiscoveredPlugin, supervisor::ProcessInstance};
 use crate::runtime::{
-    InstalledPluginView, PageDefinition, PluginRuntime, PluginState, RuntimeCatalog, TenantView,
-    UserView,
+    InstalledPluginView, PageDefinition, PluginRuntime, PluginState, RuntimeAccountItem,
+    RuntimeCatalog, TenantView, UserView,
 };
 
 const SCHEMA: &str = r#"
@@ -192,21 +192,27 @@ impl PluginStore {
         user: UserView,
     ) -> Result<RuntimeCatalog> {
         let rows = sqlx::query(
-            "SELECT sources.id, sources.git, revisions.revision, revisions.runtime, revisions.pages, bindings.enabled FROM tenant_plugin_bindings bindings JOIN plugin_sources sources ON sources.id = bindings.source_id JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.tenant_id = $1 ORDER BY sources.git",
+            "SELECT sources.id, sources.git, revisions.revision, revisions.runtime, revisions.manifest, revisions.pages, bindings.enabled FROM tenant_plugin_bindings bindings JOIN plugin_sources sources ON sources.id = bindings.source_id JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.tenant_id = $1 ORDER BY sources.git",
         )
         .bind(tenant_id)
         .fetch_all(&self.pool)
         .await?;
         let mut pages = Vec::new();
+        let mut account_items = Vec::new();
         let mut plugins = Vec::new();
         for row in rows {
+            let source_id: String = row.try_get("id")?;
             let enabled: bool = row.try_get("enabled")?;
             let value: Value = row.try_get("pages")?;
             if enabled {
-                pages.extend(serde_json::from_value::<Vec<PageDefinition>>(value)?);
+                let plugin_pages = serde_json::from_value::<Vec<PageDefinition>>(value)?;
+                let manifest = serde_json::from_value::<PluginManifest>(row.try_get("manifest")?)
+                    .context("解析已安装插件清单失败")?;
+                account_items.extend(runtime_account_items(&source_id, &manifest, &plugin_pages)?);
+                pages.extend(plugin_pages);
             }
             plugins.push(InstalledPluginView {
-                source_id: row.try_get("id")?,
+                source_id,
                 git: row.try_get("git")?,
                 revision: row.try_get("revision")?,
                 runtime: parse_runtime(row.try_get("runtime")?)?,
@@ -225,6 +231,7 @@ impl PluginStore {
             },
             user,
             pages,
+            account_items,
             plugins,
         })
     }
@@ -567,6 +574,32 @@ fn ensure_unique_pages(pages: &[PageDefinition]) -> Result<()> {
     Ok(())
 }
 
+fn runtime_account_items(
+    source_id: &str,
+    manifest: &PluginManifest,
+    pages: &[PageDefinition],
+) -> Result<Vec<RuntimeAccountItem>> {
+    let mut items = Vec::new();
+    for action in manifest
+        .subplugins
+        .iter()
+        .flat_map(|subplugin| subplugin.account_actions.iter())
+    {
+        let page = pages
+            .iter()
+            .find(|page| page.id == *action)
+            .with_context(|| format!("账户动作缺少已声明页面: {action}"))?;
+        items.push(RuntimeAccountItem {
+            id: format!("{source_id}:{action}"),
+            label: page.label.clone(),
+            icon: page.icon.clone(),
+            page_id: page.id.clone(),
+            required_permission: page.required_permission.clone(),
+        });
+    }
+    Ok(items)
+}
+
 async fn record_event(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant_id: &str,
@@ -621,5 +654,51 @@ fn parse_runtime(value: String) -> Result<PluginRuntime> {
         "process" => Ok(PluginRuntime::Process),
         "rust-source" => Ok(PluginRuntime::RustSource),
         _ => anyhow::bail!("未知插件运行时: {value}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use az_plugin_manifest::{PageBody, SceneDefinition, SubpluginManifest};
+
+    use super::*;
+
+    #[test]
+    fn derives_account_item_from_declared_runtime_page() -> Result<()> {
+        let manifest = PluginManifest {
+            subplugins: vec![SubpluginManifest {
+                id: "profile".to_owned(),
+                dependencies: Vec::new(),
+                pages: vec!["profile".to_owned()],
+                routes: Vec::new(),
+                account_actions: vec!["profile".to_owned()],
+            }],
+            ..PluginManifest::default()
+        };
+        let pages = vec![PageDefinition {
+            id: "profile".to_owned(),
+            label: "个人资料".to_owned(),
+            icon: Some("user".to_owned()),
+            scene: SceneDefinition {
+                id: "account".to_owned(),
+                label: "账户".to_owned(),
+            },
+            required_permission: Some("profile:view".to_owned()),
+            body: PageBody::Text {
+                title: "个人资料".to_owned(),
+                content: "内容".to_owned(),
+            },
+        }];
+
+        let items = runtime_account_items("source", &manifest, &pages)?;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "source:profile");
+        assert_eq!(items[0].page_id, "profile");
+        assert_eq!(
+            items[0].required_permission.as_deref(),
+            Some("profile:view")
+        );
+        Ok(())
     }
 }
