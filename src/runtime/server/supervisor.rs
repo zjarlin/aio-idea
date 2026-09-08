@@ -404,6 +404,7 @@ fn missing_docker_object(error: &anyhow::Error) -> bool {
     message.contains("no such container")
         || message.contains("no such network")
         || message.contains("no such object")
+        || message.contains("not found")
 }
 
 fn truncate(value: &str) -> String {
@@ -504,6 +505,7 @@ mod tests {
             "Error: No such container: example",
             "Error: No such network: example",
             "Error: No such object: example",
+            "Error response from daemon: network example not found",
         ] {
             assert!(missing_docker_object(&anyhow::anyhow!(message)));
         }
