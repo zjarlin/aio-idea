@@ -78,16 +78,28 @@ mv \"\$incoming\" \"\$remote_release\"
 ln -s \"\$remote_release\" \"\$deploy_root/.next\"
 mv -Tf \"\$deploy_root/.next\" \"\$deploy_root/current\"
 
+wait_for_health() {
+    attempts=0
+    while [ "\$attempts" -lt 90 ]; do
+        if curl --fail --silent --show-error http://127.0.0.1:3080/health >/dev/null; then
+            return 0
+        fi
+        attempts=\$((attempts + 1))
+        sleep 1
+    done
+    return 1
+}
+
 if systemctl restart aio-plugin-supervisor.service \\
     && systemctl restart aio-public-shell.service \\
-    && curl --fail --silent --show-error --retry 12 --retry-delay 1 http://127.0.0.1:3080/health >/dev/null; then
+    && wait_for_health; then
     printf '已激活 %s\\n' '$revision'
 else
     ln -s \"\$previous\" \"\$deploy_root/.rollback\"
     mv -Tf \"\$deploy_root/.rollback\" \"\$deploy_root/current\"
     systemctl restart aio-plugin-supervisor.service
     systemctl restart aio-public-shell.service
-    curl --fail --silent --show-error --retry 12 --retry-delay 1 http://127.0.0.1:3080/health >/dev/null
+    wait_for_health
     printf '发布失败，已恢复 %s\\n' \"\$previous\" >&2
     exit 1
 fi"
