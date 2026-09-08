@@ -1,8 +1,9 @@
 use anyhow::{Context as _, Result, ensure};
+use az_plugin_manifest::PluginManifest;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 
-use super::repository::DiscoveredPlugin;
+use super::{repository::DiscoveredPlugin, supervisor::ProcessInstance};
 use crate::runtime::{
     InstalledPluginView, PageDefinition, PluginRuntime, PluginState, RuntimeCatalog, TenantView,
     UserView,
@@ -29,9 +30,13 @@ CREATE TABLE IF NOT EXISTS plugin_runtime_instances (
     tenant_id TEXT NOT NULL,
     revision_id TEXT NOT NULL REFERENCES plugin_revisions(id),
     state TEXT NOT NULL,
+    runtime_handle TEXT,
+    endpoint TEXT,
     started_at TIMESTAMPTZ,
     stopped_at TIMESTAMPTZ
 );
+ALTER TABLE plugin_runtime_instances ADD COLUMN IF NOT EXISTS runtime_handle TEXT;
+ALTER TABLE plugin_runtime_instances ADD COLUMN IF NOT EXISTS endpoint TEXT;
 CREATE TABLE IF NOT EXISTS tenant_plugin_bindings (
     tenant_id TEXT NOT NULL,
     source_id TEXT NOT NULL REFERENCES plugin_sources(id) ON DELETE CASCADE,
@@ -62,6 +67,31 @@ pub struct PluginStore {
     pool: PgPool,
 }
 
+pub struct ProcessBinding {
+    pub instance_id: String,
+}
+
+pub struct BoundRuntime {
+    pub revision_id: String,
+    pub revision: String,
+    pub runtime: PluginRuntime,
+}
+
+pub struct ServiceBinding {
+    pub runtime: PluginRuntime,
+    pub revision: String,
+    pub artifact: String,
+    pub endpoint: Option<String>,
+    pub routes: Vec<String>,
+}
+
+pub struct ProcessTarget {
+    pub tenant_id: String,
+    pub source_id: String,
+    pub revision_id: String,
+    pub revision: String,
+}
+
 impl PluginStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -85,7 +115,20 @@ impl PluginStore {
         Ok(count > 0)
     }
 
-    pub async fn activate(&self, tenant_id: &str, plugin: DiscoveredPlugin) -> Result<()> {
+    pub async fn source_id(&self, git: &str) -> Result<Option<String>> {
+        sqlx::query_scalar("SELECT id FROM plugin_sources WHERE git = $1")
+            .bind(git)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn activate(
+        &self,
+        tenant_id: &str,
+        plugin: DiscoveredPlugin,
+        instance: Option<&ProcessInstance>,
+    ) -> Result<()> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO plugin_sources (id, git) VALUES ($1, $2) ON CONFLICT (git) DO UPDATE SET git = EXCLUDED.git",
@@ -120,7 +163,7 @@ impl PluginStore {
         .execute(&mut *transaction)
         .await?;
         stop_instances(&mut transaction, tenant_id, &source_id).await?;
-        start_instance(&mut transaction, tenant_id, &revision_id).await?;
+        start_instance(&mut transaction, tenant_id, &revision_id, instance).await?;
         record_event(
             &mut transaction,
             tenant_id,
@@ -178,14 +221,20 @@ impl PluginStore {
         })
     }
 
-    pub async fn set_enabled(&self, tenant_id: &str, source_id: &str, enabled: bool) -> Result<()> {
+    pub async fn set_enabled(
+        &self,
+        tenant_id: &str,
+        source_id: &str,
+        enabled: bool,
+        instance: Option<&ProcessInstance>,
+    ) -> Result<()> {
         let mut transaction = self.pool.begin().await?;
         let revision_id = sqlx::query_scalar::<_, String>("UPDATE tenant_plugin_bindings SET enabled = $3, updated_at = now() WHERE tenant_id = $1 AND source_id = $2 RETURNING revision_id")
             .bind(tenant_id).bind(source_id).bind(enabled).fetch_optional(&mut *transaction).await?
             .context("插件绑定不存在")?;
         stop_instances(&mut transaction, tenant_id, source_id).await?;
         if enabled {
-            start_instance(&mut transaction, tenant_id, &revision_id).await?;
+            start_instance(&mut transaction, tenant_id, &revision_id, instance).await?;
         }
         record_event(
             &mut transaction,
@@ -224,22 +273,40 @@ impl PluginStore {
         Ok(())
     }
 
-    pub async fn rollback(&self, tenant_id: &str, source_id: &str) -> Result<()> {
-        let mut transaction = self.pool.begin().await?;
-        let revision_id = sqlx::query_scalar::<_, String>(
-            "SELECT revisions.id FROM plugin_revisions revisions JOIN tenant_plugin_bindings bindings ON bindings.source_id = revisions.source_id WHERE bindings.tenant_id = $1 AND bindings.source_id = $2 AND revisions.id <> bindings.revision_id ORDER BY revisions.created_at DESC LIMIT 1",
+    pub async fn rollback_target(&self, tenant_id: &str, source_id: &str) -> Result<BoundRuntime> {
+        let row = sqlx::query(
+            "SELECT revisions.id, revisions.revision, revisions.runtime FROM plugin_revisions revisions JOIN tenant_plugin_bindings bindings ON bindings.source_id = revisions.source_id WHERE bindings.tenant_id = $1 AND bindings.source_id = $2 AND revisions.id <> bindings.revision_id ORDER BY revisions.created_at DESC LIMIT 1",
         )
-        .bind(tenant_id).bind(source_id).fetch_optional(&mut *transaction).await?
+        .bind(tenant_id)
+        .bind(source_id)
+        .fetch_optional(&self.pool)
+        .await?
         .context("没有可回滚的历史版本")?;
+        Ok(BoundRuntime {
+            revision_id: row.try_get("id")?,
+            revision: row.try_get("revision")?,
+            runtime: parse_runtime(row.try_get("runtime")?)?,
+        })
+    }
+
+    pub async fn rollback_to(
+        &self,
+        tenant_id: &str,
+        source_id: &str,
+        target: &BoundRuntime,
+        instance: Option<&ProcessInstance>,
+    ) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
         stop_instances(&mut transaction, tenant_id, source_id).await?;
-        sqlx::query("UPDATE tenant_plugin_bindings SET revision_id = $3, enabled = TRUE, updated_at = now() WHERE tenant_id = $1 AND source_id = $2")
-            .bind(tenant_id).bind(source_id).bind(&revision_id).execute(&mut *transaction).await?;
-        start_instance(&mut transaction, tenant_id, &revision_id).await?;
+        let result = sqlx::query("UPDATE tenant_plugin_bindings SET revision_id = $3, enabled = TRUE, updated_at = now() WHERE tenant_id = $1 AND source_id = $2 AND EXISTS (SELECT 1 FROM plugin_revisions WHERE id = $3 AND source_id = $2)")
+            .bind(tenant_id).bind(source_id).bind(&target.revision_id).execute(&mut *transaction).await?;
+        ensure!(result.rows_affected() == 1, "回滚目标不属于当前插件");
+        start_instance(&mut transaction, tenant_id, &target.revision_id, instance).await?;
         record_event(
             &mut transaction,
             tenant_id,
             source_id,
-            Some(&revision_id),
+            Some(&target.revision_id),
             "rollback",
             "已切回上一健康版本",
         )
@@ -259,19 +326,139 @@ impl PluginStore {
         Ok(())
     }
 
-    pub async fn active_component(
+    pub async fn active_service(
         &self,
         tenant_id: &str,
         source_id: &str,
-    ) -> Result<Option<(String, String)>> {
-        sqlx::query_as(
-            "SELECT revisions.revision, revisions.manifest->'runtime'->>'artifact' FROM tenant_plugin_bindings bindings JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.tenant_id = $1 AND bindings.source_id = $2 AND bindings.enabled = TRUE AND revisions.runtime = 'wasm-component'",
+    ) -> Result<Option<ServiceBinding>> {
+        let row = sqlx::query(
+            "SELECT revisions.revision, revisions.runtime, revisions.manifest, instances.endpoint FROM tenant_plugin_bindings bindings JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id LEFT JOIN LATERAL (SELECT endpoint FROM plugin_runtime_instances WHERE tenant_id = bindings.tenant_id AND revision_id = revisions.id AND state = 'active' ORDER BY started_at DESC LIMIT 1) instances ON TRUE WHERE bindings.tenant_id = $1 AND bindings.source_id = $2 AND bindings.enabled = TRUE AND revisions.runtime IN ('wasm-component', 'process')",
         )
         .bind(tenant_id)
         .bind(source_id)
         .fetch_optional(&self.pool)
-        .await
-        .map_err(Into::into)
+        .await?;
+        row.map(|row| {
+            let manifest = serde_json::from_value::<PluginManifest>(row.try_get("manifest")?)?;
+            let runtime = manifest
+                .runtime
+                .as_ref()
+                .context("活动服务插件缺少 runtime 清单")?;
+            Ok(ServiceBinding {
+                runtime: parse_runtime(row.try_get("runtime")?)?,
+                revision: row.try_get("revision")?,
+                artifact: runtime.artifact.clone(),
+                endpoint: row.try_get("endpoint")?,
+                routes: manifest
+                    .subplugins
+                    .iter()
+                    .flat_map(|plugin| plugin.routes.iter().cloned())
+                    .collect(),
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn bound_runtime(&self, tenant_id: &str, source_id: &str) -> Result<BoundRuntime> {
+        let row = sqlx::query(
+            "SELECT revisions.id, revisions.revision, revisions.runtime FROM tenant_plugin_bindings bindings JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.tenant_id = $1 AND bindings.source_id = $2",
+        )
+        .bind(tenant_id)
+        .bind(source_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .context("插件绑定不存在")?;
+        Ok(BoundRuntime {
+            revision_id: row.try_get("id")?,
+            revision: row.try_get("revision")?,
+            runtime: parse_runtime(row.try_get("runtime")?)?,
+        })
+    }
+
+    pub async fn active_process(
+        &self,
+        tenant_id: &str,
+        source_id: &str,
+    ) -> Result<Option<ProcessBinding>> {
+        let row = sqlx::query(
+            "SELECT instances.runtime_handle FROM tenant_plugin_bindings bindings JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id JOIN plugin_runtime_instances instances ON instances.revision_id = revisions.id AND instances.tenant_id = bindings.tenant_id AND instances.state = 'active' WHERE bindings.tenant_id = $1 AND bindings.source_id = $2 AND bindings.enabled = TRUE AND revisions.runtime = 'process' ORDER BY instances.started_at DESC LIMIT 1",
+        )
+        .bind(tenant_id)
+        .bind(source_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            Ok(ProcessBinding {
+                instance_id: row
+                    .try_get::<Option<String>, _>("runtime_handle")?
+                    .context("process 插件实例缺少 runtime_handle")?,
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn enabled_process_targets(&self) -> Result<Vec<ProcessTarget>> {
+        let rows = sqlx::query(
+            "SELECT bindings.tenant_id, bindings.source_id, revisions.id, revisions.revision FROM tenant_plugin_bindings bindings JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.enabled = TRUE AND revisions.runtime = 'process' ORDER BY bindings.tenant_id, bindings.source_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ProcessTarget {
+                    tenant_id: row.try_get("tenant_id")?,
+                    source_id: row.try_get("source_id")?,
+                    revision_id: row.try_get("id")?,
+                    revision: row.try_get("revision")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn verify_revision_pages(
+        &self,
+        revision_id: &str,
+        pages: &[PageDefinition],
+    ) -> Result<()> {
+        let stored =
+            sqlx::query_scalar::<_, Value>("SELECT pages FROM plugin_revisions WHERE id = $1")
+                .bind(revision_id)
+                .fetch_optional(&self.pool)
+                .await?
+                .context("插件 revision 不存在")?;
+        let stored = serde_json::from_value::<Vec<PageDefinition>>(stored)?;
+        ensure!(
+            stored == pages,
+            "process 插件重启后 PageDefinition 发生漂移"
+        );
+        Ok(())
+    }
+
+    pub async fn recover_process_instance(
+        &self,
+        target: &ProcessTarget,
+        instance: &ProcessInstance,
+    ) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        stop_instances(&mut transaction, &target.tenant_id, &target.source_id).await?;
+        start_instance(
+            &mut transaction,
+            &target.tenant_id,
+            &target.revision_id,
+            Some(instance),
+        )
+        .await?;
+        record_event(
+            &mut transaction,
+            &target.tenant_id,
+            &target.source_id,
+            Some(&target.revision_id),
+            "recover",
+            "宿主启动时已恢复 process 插件实例",
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(())
     }
 }
 
@@ -316,9 +503,12 @@ async fn start_instance(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant_id: &str,
     revision_id: &str,
+    instance: Option<&ProcessInstance>,
 ) -> Result<()> {
-    sqlx::query("INSERT INTO plugin_runtime_instances (id, tenant_id, revision_id, state, started_at) VALUES ($1, $2, $3, 'active', now())")
+    sqlx::query("INSERT INTO plugin_runtime_instances (id, tenant_id, revision_id, state, runtime_handle, endpoint, started_at) VALUES ($1, $2, $3, 'active', $4, $5, now())")
         .bind(uuid::Uuid::new_v4().to_string()).bind(tenant_id).bind(revision_id)
+        .bind(instance.map(|instance| instance.instance_id.as_str()))
+        .bind(instance.map(|instance| instance.endpoint.as_str()))
         .execute(&mut **transaction).await?;
     Ok(())
 }

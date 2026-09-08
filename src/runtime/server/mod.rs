@@ -1,6 +1,8 @@
+mod process;
 mod repository;
 mod routes;
 mod store;
+mod supervisor;
 mod wasm;
 
 use std::{env, path::PathBuf, sync::Arc};
@@ -10,6 +12,7 @@ use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 
 pub use routes::router;
+pub use supervisor::run as run_supervisor;
 
 #[derive(Clone)]
 pub struct RuntimeState {
@@ -17,6 +20,7 @@ pub struct RuntimeState {
     pub repository: Arc<repository::RepositoryInstaller>,
     pub identity: Arc<aio_plugin_identity_server::IdentityService>,
     pub marketplace_url: String,
+    pub process: Arc<process::ProcessManager>,
 }
 
 impl RuntimeState {
@@ -37,16 +41,19 @@ impl RuntimeState {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(".aio/runtime"));
         let repository = Arc::new(repository::RepositoryInstaller::new(cache_root));
+        let process = Arc::new(process::ProcessManager::new()?);
         let state = Self {
             store,
             repository,
             identity,
+            process,
             marketplace_url: env::var("AIO_MARKETPLACE_URL").unwrap_or_else(|_| {
                 "https://raw.githubusercontent.com/zjarlin/aio/main/marketplace/index.json"
                     .to_owned()
             }),
         };
         state.ensure_default_plugins().await?;
+        state.reconcile_processes().await?;
         Ok(state)
     }
 
@@ -71,7 +78,43 @@ impl RuntimeState {
             );
         }
         for plugin in plugins {
-            self.store.activate("default", plugin).await?;
+            self.store.activate("default", plugin, None).await?;
+        }
+        Ok(())
+    }
+
+    async fn reconcile_processes(&self) -> Result<()> {
+        let targets = self.store.enabled_process_targets().await?;
+        if targets.is_empty() {
+            return Ok(());
+        }
+        self.process.health().await?;
+        for target in targets {
+            let instance = self
+                .process
+                .start(&target.tenant_id, &target.source_id, &target.revision)
+                .await
+                .with_context(|| {
+                    format!(
+                        "恢复 process 插件失败: tenant={} source={} revision={}",
+                        target.tenant_id, target.source_id, target.revision
+                    )
+                })?;
+            let validation = async {
+                let pages = self.process.load_pages(&instance.endpoint).await?;
+                self.repository.validate_pages(&target.revision, &pages)?;
+                self.store
+                    .verify_revision_pages(&target.revision_id, &pages)
+                    .await
+            }
+            .await;
+            if let Err(error) = validation {
+                let _ = self.process.stop(&instance.instance_id).await;
+                return Err(error.context("恢复 process 插件页面失败"));
+            }
+            self.store
+                .recover_process_instance(&target, &instance)
+                .await?;
         }
         Ok(())
     }

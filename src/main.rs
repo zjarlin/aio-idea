@@ -18,6 +18,9 @@ fn main() {
 #[cfg(feature = "server")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("supervisor") {
+        return runtime::server::run_supervisor().await;
+    }
     server::run().await
 }
 

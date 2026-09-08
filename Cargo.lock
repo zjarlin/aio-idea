@@ -213,8 +213,10 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tar",
+ "tempfile",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "tower-http",
@@ -521,7 +523,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-manifest"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio.git?rev=745631cc42ff5805791d377ea3f1855c90ae1567#745631cc42ff5805791d377ea3f1855c90ae1567"
+source = "git+https://github.com/zjarlin/aio.git?rev=2422c460901a777e69776088513ba25fec04d623#2422c460901a777e69776088513ba25fec04d623"
 dependencies = [
  "anyhow",
  "semver",

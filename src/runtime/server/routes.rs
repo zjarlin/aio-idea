@@ -1,4 +1,5 @@
 use aio_plugin_identity_server::SessionContext;
+use anyhow::Context as _;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -22,10 +23,7 @@ pub fn router(state: RuntimeState) -> Router {
         .route("/api/runtime/marketplace", get(marketplace))
         .route("/api/runtime/registries", post(add_registry))
         .route("/api/runtime/plugins/install", post(install))
-        .route(
-            "/api/runtime/components/{source_id}/{*path}",
-            any(component),
-        )
+        .route("/api/runtime/services/{source_id}/{*path}", any(service))
         .route("/api/runtime/plugins/{source_id}/enable", post(enable))
         .route("/api/runtime/plugins/{source_id}/disable", post(disable))
         .route("/api/runtime/plugins/{source_id}/rollback", post(rollback))
@@ -50,11 +48,33 @@ async fn install(
     Json(request): Json<InstallPluginRequest>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
-    let discovered = state
+    let mut discovered = state
         .repository
         .discover(&request.git, request.rev.as_deref())
         .await?;
-    state.store.activate(&session.tenant_id, discovered).await?;
+    if let Some(source_id) = state.store.source_id(&discovered.git).await? {
+        discovered.source_id = source_id;
+    }
+    let previous = state
+        .store
+        .active_process(&session.tenant_id, &discovered.source_id)
+        .await?;
+    let instance = if discovered.runtime == crate::runtime::PluginRuntime::Process {
+        Some(prepare_process(&state, &session.tenant_id, &mut discovered).await?)
+    } else {
+        None
+    };
+    if let Err(error) = state
+        .store
+        .activate(&session.tenant_id, discovered, instance.as_ref())
+        .await
+    {
+        if let Some(instance) = &instance {
+            let _ = state.process.stop(&instance.instance_id).await;
+        }
+        return Err(error.into());
+    }
+    stop_previous_process(&state, previous, instance.as_ref()).await?;
     catalog_for(&state, &session).await
 }
 
@@ -64,10 +84,29 @@ async fn enable(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
-    state
+    let target = state
         .store
-        .set_enabled(&session.tenant_id, &source_id, true)
+        .bound_runtime(&session.tenant_id, &source_id)
         .await?;
+    let instance = if target.runtime == crate::runtime::PluginRuntime::Process {
+        Some(
+            prepare_process_revision(&state, &session.tenant_id, &source_id, &target.revision)
+                .await?
+                .0,
+        )
+    } else {
+        None
+    };
+    if let Err(error) = state
+        .store
+        .set_enabled(&session.tenant_id, &source_id, true, instance.as_ref())
+        .await
+    {
+        if let Some(instance) = &instance {
+            let _ = state.process.stop(&instance.instance_id).await;
+        }
+        return Err(error.into());
+    }
     catalog_for(&state, &session).await
 }
 
@@ -77,10 +116,17 @@ async fn disable(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
+    let previous = state
+        .store
+        .active_process(&session.tenant_id, &source_id)
+        .await?;
     state
         .store
-        .set_enabled(&session.tenant_id, &source_id, false)
+        .set_enabled(&session.tenant_id, &source_id, false, None)
         .await?;
+    if let Some(previous) = previous {
+        state.process.stop(&previous.instance_id).await?;
+    }
     catalog_for(&state, &session).await
 }
 
@@ -90,10 +136,17 @@ async fn uninstall(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
+    let previous = state
+        .store
+        .active_process(&session.tenant_id, &source_id)
+        .await?;
     state
         .store
         .uninstall(&session.tenant_id, &source_id)
         .await?;
+    if let Some(previous) = previous {
+        state.process.stop(&previous.instance_id).await?;
+    }
     catalog_for(&state, &session).await
 }
 
@@ -103,7 +156,34 @@ async fn rollback(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
-    state.store.rollback(&session.tenant_id, &source_id).await?;
+    let previous = state
+        .store
+        .active_process(&session.tenant_id, &source_id)
+        .await?;
+    let target = state
+        .store
+        .rollback_target(&session.tenant_id, &source_id)
+        .await?;
+    let instance = if target.runtime == crate::runtime::PluginRuntime::Process {
+        Some(
+            prepare_process_revision(&state, &session.tenant_id, &source_id, &target.revision)
+                .await?
+                .0,
+        )
+    } else {
+        None
+    };
+    if let Err(error) = state
+        .store
+        .rollback_to(&session.tenant_id, &source_id, &target, instance.as_ref())
+        .await
+    {
+        if let Some(instance) = &instance {
+            let _ = state.process.stop(&instance.instance_id).await;
+        }
+        return Err(error.into());
+    }
+    stop_previous_process(&state, previous, instance.as_ref()).await?;
     catalog_for(&state, &session).await
 }
 
@@ -182,7 +262,7 @@ fn unlisted_entry(plugin: &crate::runtime::InstalledPluginView) -> MarketplaceEn
     }
 }
 
-async fn component(
+async fn service(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
     Path((source_id, path)): Path<(String, String)>,
@@ -191,34 +271,142 @@ async fn component(
     body: Bytes,
 ) -> Result<Response, RuntimeError> {
     let session = authenticate(&state, &headers).await?;
-    let (revision, artifact) = state
+    let binding = state
         .store
-        .active_component(&session.tenant_id, &source_id)
+        .active_service(&session.tenant_id, &source_id)
         .await?
-        .ok_or_else(|| RuntimeError::not_found("当前租户没有活动的 Wasm Component"))?;
-    let artifact = state.repository.artifact(&revision, &artifact)?;
-    let body = String::from_utf8(body.to_vec())
-        .map_err(|_| RuntimeError::bad_request("Wasm Component 请求体必须是 UTF-8"))?;
-    let request = serde_json::json!({
-        "method": method.as_str(),
-        "path": format!("/{path}"),
-        "query": uri.query(),
-        "body": body,
-        "tenant_id": session.tenant_id,
-        "user_id": session.user_id,
-    })
-    .to_string();
-    let output = tokio::task::spawn_blocking(move || super::wasm::handle(&artifact, request))
-        .await
-        .map_err(|error| RuntimeError::bad_request(format!("等待 Wasm 请求处理失败: {error}")))??;
-    let status = StatusCode::from_u16(output.status)
-        .map_err(|_| RuntimeError::bad_request("Wasm Component 返回了无效状态码"))?;
-    let content_type = HeaderValue::from_str(&output.content_type)
-        .map_err(|_| RuntimeError::bad_request("Wasm Component 返回了无效 Content-Type"))?;
-    let mut response = (status, output.body).into_response();
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, content_type);
+        .ok_or_else(|| RuntimeError::not_found("当前租户没有活动的服务插件"))?;
+    ensure_route_allowed(&binding.routes, &path)?;
+    let path = format!("/{path}");
+    match binding.runtime {
+        crate::runtime::PluginRuntime::WasmComponent => {
+            let artifact = state
+                .repository
+                .artifact(&binding.revision, &binding.artifact)?;
+            let body = String::from_utf8(body.to_vec())
+                .map_err(|_| RuntimeError::bad_request("Wasm Component 请求体必须是 UTF-8"))?;
+            let request = serde_json::json!({
+                "method": method.as_str(),
+                "path": path,
+                "query": uri.query(),
+                "body": body,
+                "tenant_id": session.tenant_id,
+                "user_id": session.user_id,
+            })
+            .to_string();
+            let output =
+                tokio::task::spawn_blocking(move || super::wasm::handle(&artifact, request))
+                    .await
+                    .map_err(|error| {
+                        RuntimeError::bad_request(format!("等待 Wasm 请求处理失败: {error}"))
+                    })??;
+            let status = StatusCode::from_u16(output.status)
+                .map_err(|_| RuntimeError::bad_request("Wasm Component 返回了无效状态码"))?;
+            response(status, Some(&output.content_type), output.body.into_bytes())
+        }
+        crate::runtime::PluginRuntime::Process => {
+            let endpoint = binding
+                .endpoint
+                .as_deref()
+                .context("process 插件缺少活动 endpoint")?;
+            let content_type = headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok());
+            let output = state
+                .process
+                .request(
+                    endpoint,
+                    method.as_str(),
+                    &path,
+                    uri.query(),
+                    body.to_vec(),
+                    content_type,
+                    &session.tenant_id,
+                    &session.user_id,
+                )
+                .await?;
+            response(output.status, output.content_type.as_deref(), output.body)
+        }
+        _ => Err(RuntimeError::not_found("当前插件不提供动态服务")),
+    }
+}
+
+async fn prepare_process(
+    state: &RuntimeState,
+    tenant_id: &str,
+    plugin: &mut super::repository::DiscoveredPlugin,
+) -> Result<super::supervisor::ProcessInstance, RuntimeError> {
+    let (instance, pages) =
+        prepare_process_revision(state, tenant_id, &plugin.source_id, &plugin.revision).await?;
+    plugin.pages = pages;
+    Ok(instance)
+}
+
+async fn prepare_process_revision(
+    state: &RuntimeState,
+    tenant_id: &str,
+    source_id: &str,
+    revision: &str,
+) -> Result<
+    (
+        super::supervisor::ProcessInstance,
+        Vec<az_plugin_manifest::PageDefinition>,
+    ),
+    RuntimeError,
+> {
+    state.process.health().await?;
+    let instance = state.process.start(tenant_id, source_id, revision).await?;
+    let validation = async {
+        let pages = state.process.load_pages(&instance.endpoint).await?;
+        state.repository.validate_pages(revision, &pages)?;
+        Ok::<_, anyhow::Error>(pages)
+    }
+    .await;
+    match validation {
+        Ok(pages) => Ok((instance, pages)),
+        Err(error) => {
+            let _ = state.process.stop(&instance.instance_id).await;
+            Err(error.into())
+        }
+    }
+}
+
+async fn stop_previous_process(
+    state: &RuntimeState,
+    previous: Option<super::store::ProcessBinding>,
+    current: Option<&super::supervisor::ProcessInstance>,
+) -> Result<(), RuntimeError> {
+    if let Some(previous) = previous
+        && current.is_none_or(|current| current.instance_id != previous.instance_id)
+    {
+        state.process.stop(&previous.instance_id).await?;
+    }
+    Ok(())
+}
+
+fn ensure_route_allowed(routes: &[String], path: &str) -> Result<(), RuntimeError> {
+    if routes
+        .iter()
+        .any(|route| path == route || path.starts_with(&format!("{route}/")))
+    {
+        return Ok(());
+    }
+    Err(RuntimeError::not_found("插件清单未声明该服务路由"))
+}
+
+fn response(
+    status: StatusCode,
+    content_type: Option<&str>,
+    body: Vec<u8>,
+) -> Result<Response, RuntimeError> {
+    let mut response = (status, body).into_response();
+    if let Some(content_type) = content_type {
+        let content_type = HeaderValue::from_str(content_type)
+            .map_err(|_| RuntimeError::bad_request("插件返回了无效 Content-Type"))?;
+        response
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, content_type);
+    }
     Ok(response)
 }
 
@@ -384,5 +572,15 @@ mod tests {
         assert!(entry.installed);
         assert_eq!(entry.source_id.as_deref(), Some("source"));
         assert_eq!(entry.tags, vec!["unlisted"]);
+    }
+
+    #[test]
+    fn allows_only_declared_route_prefixes() {
+        let routes = vec!["echo".to_owned(), "jobs/status".to_owned()];
+        assert!(ensure_route_allowed(&routes, "echo").is_ok());
+        assert!(ensure_route_allowed(&routes, "echo/detail").is_ok());
+        assert!(ensure_route_allowed(&routes, "jobs/status/current").is_ok());
+        assert!(ensure_route_allowed(&routes, "jobs").is_err());
+        assert!(ensure_route_allowed(&routes, "other").is_err());
     }
 }

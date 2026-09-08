@@ -102,13 +102,15 @@ impl RepositoryInstaller {
                         .await
                         .context("等待 Wasm Component 验证失败")??
                 }
-                PluginRuntime::Process => anyhow::bail!("process 插件必须由进程监督器激活"),
+                PluginRuntime::Process => Vec::new(),
                 PluginRuntime::RustSource => {
                     anyhow::bail!("rust-source 插件必须通过整套发布切换")
                 }
             };
-            validate_page_definitions(&pages)?;
-            validate_declared_pages(&manifest, &pages)?;
+            if runtime_kind != PluginRuntime::Process {
+                validate_page_definitions(&pages)?;
+                validate_declared_pages(&manifest, &pages)?;
+            }
             let final_directory = self.cache_root.join(&resolved);
             if final_directory.exists() {
                 tokio::fs::remove_dir_all(&staging).await?;
@@ -183,6 +185,16 @@ impl RepositoryInstaller {
             "插件 revision 必须是完整提交 SHA"
         );
         artifact_path(&self.cache_root.join(revision), relative)
+    }
+
+    pub fn validate_pages(&self, revision: &str, pages: &[PageDefinition]) -> Result<()> {
+        ensure!(
+            revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "插件 revision 必须是完整提交 SHA"
+        );
+        let manifest = read_manifest(&self.cache_root.join(revision))?;
+        validate_page_definitions(pages)?;
+        validate_declared_pages(&manifest, pages)
     }
 }
 

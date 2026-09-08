@@ -1,0 +1,27 @@
+[Unit]
+Description=AIO isolated process plugin supervisor
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=aio-shell
+UMask=0007
+WorkingDirectory=/opt/aio-public-shell/current
+Environment=AIO_PLUGIN_CACHE=/opt/aio-public-shell/plugin-cache
+Environment=AIO_PLUGIN_SUPERVISOR_SOCKET=/run/aio-plugin-supervisor/supervisor.sock
+ExecStart=/opt/aio-public-shell/current/aio-public-shell supervisor
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=aio-plugin-supervisor
+RuntimeDirectoryMode=0770
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
