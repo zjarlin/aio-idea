@@ -4,6 +4,12 @@
 
 发布物按提交放入 `/opt/aio-public-shell/releases/<revision>`，健康检查通过后原子更新 `/opt/aio-public-shell/current`。失败时保留旧软链接和旧发布目录。
 
+252 使用 glibc 2.17，服务端必须显式构建为对应 Zig 目标：
+
+```bash
+cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.17 --no-default-features --features server
+```
+
 ```bash
 systemctl enable --now aio-plugin-supervisor.service
 systemctl restart aio-public-shell.service

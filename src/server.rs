@@ -5,7 +5,11 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
-use axum::{Router, routing::get};
+use axum::{
+    Json, Router,
+    http::StatusCode,
+    routing::{any, get},
+};
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::{plugins, runtime};
@@ -35,6 +39,7 @@ pub async fn run() -> Result<()> {
         .route("/health", get(|| async { "ok" }))
         .merge(runtime::server::router(runtime))
         .merge(plugins::server_router(&plugin_catalog)?)
+        .route("/api/{*path}", any(api_not_found))
         .fallback_service(application);
     let address = SocketAddr::from((host, port));
     let listener = tokio::net::TcpListener::bind(address)
@@ -44,4 +49,11 @@ pub async fn run() -> Result<()> {
     axum::serve(listener, router)
         .await
         .context("AIO 服务异常退出")
+}
+
+async fn api_not_found() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "API 路由不存在" })),
+    )
 }
