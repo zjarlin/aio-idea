@@ -9,18 +9,36 @@ anyhow = "1.0.99"
 axum = { version = "0.8.6", optional = true }
 dill = "0.15.0"
 dioxus = { version = "=0.7.9", default-features = false, features = ["macro", "html", "signals"], optional = true }
-az-dioxus-admin-shell = { git = "https://github.com/zjarlin/dioxus-admin-workbench.git", rev = "b2d33b9eb404ef06e924eb658403cd3b55d98c98", default-features = false, optional = true }
-tokio = { version = "1.47.1", features = ["macros", "net", "rt-multi-thread"], optional = true }
+az-dioxus-admin-shell = { git = "https://github.com/zjarlin/dioxus-admin-workbench.git", rev = "aa19101b1d0739a0c6f0df99677c1ba3483a746d", default-features = false, optional = true }
+az-ui-components = { git = "https://github.com/zjarlin/dioxus-admin-workbench.git", rev = "aa19101b1d0739a0c6f0df99677c1ba3483a746d", optional = true }
+gloo-net = { version = "0.6.0", features = ["http", "json"], optional = true }
+reqwest = { version = "0.12.23", default-features = false, features = ["json", "rustls-tls"], optional = true }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sqlx = { version = "0.8.6", default-features = false, features = ["postgres", "runtime-tokio-rustls", "json"], optional = true }
+tokio = { version = "1.47.1", features = ["fs", "macros", "net", "process", "rt-multi-thread"], optional = true }
+toml = { version = "0.9.5", optional = true }
 tower-http = { version = "0.6.2", features = ["fs"], optional = true }
-aio_plugin_hello_client = { package = "aio-plugin-hello-client", git = "https://github.com/zjarlin/aio-plugin-hello.git", rev = "c382f3c9c33fb553f75944539c3689c43936c19a", optional = true }
-aio_plugin_hello_server = { package = "aio-plugin-hello-server", git = "https://github.com/zjarlin/aio-plugin-hello.git", rev = "c382f3c9c33fb553f75944539c3689c43936c19a", optional = true }
+uuid = { version = "1.18.1", features = ["v4"], optional = true }
+wasmtime = { version = "48.0.0", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std"], optional = true }
+web-sys = { version = "0.3.77", features = ["Location", "Window"], optional = true }
+aio_plugin_account = { package = "aio-plugin-account", git = "https://github.com/zjarlin/aio-plugin-account.git", rev = "4501496f224147d5e68123b3eb1b91798a0a9517", optional = true }
+aio_plugin_marketplace_client = { package = "aio-plugin-marketplace-client", git = "https://github.com/zjarlin/aio-plugin-marketplace.git", rev = "0f7d184f27415717daa903d9adc3d368caf0b803", optional = true }
+aio_plugin_marketplace_server = { package = "aio-plugin-marketplace-server", git = "https://github.com/zjarlin/aio-plugin-marketplace.git", rev = "0f7d184f27415717daa903d9adc3d368caf0b803", optional = true }
+aio_plugin_settings = { package = "aio-plugin-settings", git = "https://github.com/zjarlin/aio-plugin-settings.git", rev = "7c3a6175440541e451dd3ec22ad7fa4f457c5e01", optional = true }
+aio_plugin_identity_client = { package = "aio-plugin-identity-client", git = "https://github.com/zjarlin/aio-plugin-identity.git", rev = "2160d874fcf74cc2b012c28cb15989c249c08d54", optional = true }
+aio_plugin_identity_server = { package = "aio-plugin-identity-server", git = "https://github.com/zjarlin/aio-plugin-identity.git", rev = "2160d874fcf74cc2b012c28cb15989c249c08d54", optional = true }
+aio_plugin_rbac_client = { package = "aio-plugin-rbac-client", git = "https://github.com/zjarlin/aio-plugin-rbac.git", rev = "4d475cdca75020c162685ff6ce7e216331964d3f", optional = true }
+aio_plugin_rbac_server = { package = "aio-plugin-rbac-server", git = "https://github.com/zjarlin/aio-plugin-rbac.git", rev = "4d475cdca75020c162685ff6ce7e216331964d3f", optional = true }
+aio_plugin_tenant_client = { package = "aio-plugin-tenant-client", git = "https://github.com/zjarlin/aio-plugin-tenant.git", rev = "c282f01a83d8fb5a0fc6c76e5efcd027e303424f", optional = true }
+aio_plugin_tenant_server = { package = "aio-plugin-tenant-server", git = "https://github.com/zjarlin/aio-plugin-tenant.git", rev = "c282f01a83d8fb5a0fc6c76e5efcd027e303424f", optional = true }
 
 [features]
 default = ["web"]
-ui = ["dep:dioxus", "dep:az-dioxus-admin-shell"]
-web = ["ui", "dioxus/web", "dioxus/launch", "dep:aio_plugin_hello_client"]
-desktop = ["ui", "dioxus/desktop", "dioxus/launch", "dep:aio_plugin_hello_client"]
-server = ["dep:axum", "dep:tokio", "dep:tower-http", "dep:aio_plugin_hello_server"]
+ui = ["dep:dioxus", "dep:az-dioxus-admin-shell", "dep:az-ui-components"]
+web = ["ui", "dioxus/web", "dioxus/launch", "dep:gloo-net", "dep:web-sys", "dep:aio_plugin_account", "dep:aio_plugin_identity_client", "dep:aio_plugin_marketplace_client", "dep:aio_plugin_rbac_client", "dep:aio_plugin_settings", "dep:aio_plugin_tenant_client"]
+desktop = ["ui", "dioxus/desktop", "dioxus/launch", "dep:aio_plugin_account", "dep:aio_plugin_identity_client", "dep:aio_plugin_marketplace_client", "dep:aio_plugin_rbac_client", "dep:aio_plugin_settings", "dep:aio_plugin_tenant_client"]
+server = ["dep:axum", "dep:reqwest", "dep:sqlx", "dep:tokio", "dep:toml", "dep:tower-http", "dep:uuid", "dep:wasmtime", "dep:aio_plugin_identity_server", "dep:aio_plugin_marketplace_server", "dep:aio_plugin_rbac_server", "dep:aio_plugin_tenant_server"]
 
 [lints.rust]
 unsafe_code = "forbid"

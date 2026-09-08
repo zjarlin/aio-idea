@@ -1,6 +1,6 @@
 # AIO
 
-这是 AIO 的公网宿主组合。页面和后端能力来自 `aio.toml` 中配置的 Git 插件，`.aio/plugins.lock` 锁定实际提交。当前内置市场示例是 [aio-plugin-hello](https://github.com/zjarlin/aio-plugin-hello)。
+这是 AIO 的公网宿主组合。系统引导能力来自 Cargo 中锁定完整提交 SHA 的独立 Git 插件；`aio.toml` 定义默认租户首次启动时安装的运行时 Git 组合，活动版本和租户绑定正式保存在 PostgreSQL。当前默认运行时插件是 [aio-plugin-hello](https://github.com/zjarlin/aio-plugin-hello)。
 
 插件开发先让 AI 阅读 AIO 仓库的 `aio-plugin-development` Skill 和对应语言规约。
 

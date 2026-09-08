@@ -2,5 +2,15 @@ services:
   aio:
     build: .
     restart: unless-stopped
+    environment:
+      AIO_DATABASE_URL: ${AIO_DATABASE_URL:?AIO_DATABASE_URL is required}
+      AIO_BOOTSTRAP_PASSWORD: ${AIO_BOOTSTRAP_PASSWORD:?AIO_BOOTSTRAP_PASSWORD is required}
+      AIO_WEB_HOST: 0.0.0.0
+      AIO_PLUGIN_CACHE: /opt/aio/plugin-cache
     ports:
       - "127.0.0.1:3080:8080"
+    volumes:
+      - aio-plugin-cache:/opt/aio/plugin-cache
+
+volumes:
+  aio-plugin-cache:

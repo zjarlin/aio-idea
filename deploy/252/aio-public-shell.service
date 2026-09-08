@@ -8,8 +8,13 @@ Type=simple
 User=aio-shell
 Group=aio-shell
 WorkingDirectory=/opt/aio-public-shell/current
+EnvironmentFile=-/opt/aio-public-shell/runtime.env
+Environment=AIO_WEB_HOST=127.0.0.1
 Environment=AIO_WEB_PORT=3080
 Environment=AIO_WEB_DIST=/opt/aio-public-shell/current/web
+Environment=AIO_CONFIG=/opt/aio-public-shell/current/aio.toml
+Environment=AIO_PLUGIN_CACHE=/opt/aio-public-shell/plugin-cache
+Environment=AIO_SESSION_SECURE=1
 ExecStart=/opt/aio-public-shell/current/aio-public-shell
 Restart=on-failure
 RestartSec=2
@@ -17,6 +22,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=true
+ReadWritePaths=/opt/aio-public-shell/plugin-cache
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]

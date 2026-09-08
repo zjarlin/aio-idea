@@ -7,9 +7,8 @@
 ```bash
 systemctl restart aio-public-shell.service
 curl --fail http://127.0.0.1:3080/health
-curl --fail http://127.0.0.1:3080/api/plugins/aio-plugin-hello/health
 systemctl restart aio-public-shell-tunnel.service
 curl --fail https://aio.addzero.site/health
 ```
 
-`credentials.json` 是服务器私密文件，不进入 Git。
+每个发布目录必须同时包含服务端二进制、`web/` 和 `aio.toml`。`credentials.json` 和只包含数据库连接、初始管理员密码的 `/opt/aio-public-shell/runtime.env` 是服务器私密文件，不进入 Git。首次启动必须设置 `AIO_BOOTSTRAP_PASSWORD`。

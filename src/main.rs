@@ -3,6 +3,7 @@
 #[cfg(any(feature = "web", feature = "desktop"))]
 mod pages;
 mod plugins;
+mod runtime;
 #[cfg(feature = "server")]
 mod server;
 
@@ -28,21 +29,64 @@ fn main() {
 #[cfg(any(feature = "web", feature = "desktop"))]
 #[allow(non_snake_case)]
 fn App() -> dioxus::prelude::Element {
-    use az_dioxus_admin_shell::{ApplicationUser, PluginApplication};
+    use az_dioxus_admin_shell::{ApplicationRuntimePage, ApplicationUser, PluginApplication};
     use dioxus::prelude::*;
 
-    let pages = match plugins::pages() {
-        Ok(pages) => pages,
+    let application = use_resource(|| async {
+        let session = aio_plugin_identity_client::load_session().await?;
+        let catalog = match session.as_ref() {
+            Some(_) => Some(runtime::client::catalog().await?),
+            None => None,
+        };
+        Ok::<_, String>((session, catalog))
+    });
+    let Some(application_result) = application.read().as_ref().cloned() else {
+        return rsx! { p { "正在验证会话" } };
+    };
+    let (session, catalog) = match application_result {
+        Ok((Some(session), Some(catalog))) => (session, catalog),
+        Ok((None, _)) => return rsx! { aio_plugin_identity_client::LoginPage {} },
+        Ok((Some(_), None)) => return rsx! { p { role: "alert", "插件目录没有返回数据" } },
+        Err(error) => return rsx! { p { role: "alert", "验证会话失败: {error}" } },
+    };
+    let mut static_plugins = match plugins::client_catalog() {
+        Ok(value) => value,
         Err(error) => return rsx! { p { "加载应用页面失败: {error}" } },
     };
+    static_plugins.pages.retain(|page| {
+        page.required_permission
+            .is_none_or(|permission| session.permissions.iter().any(|item| item == permission))
+    });
+    static_plugins.account_items.retain(|item| {
+        item.required_permission
+            .as_deref()
+            .is_none_or(|permission| session.permissions.iter().any(|value| value == permission))
+    });
+    let runtime_pages = catalog
+        .pages
+        .into_iter()
+        .map(|page| ApplicationRuntimePage {
+            id: page.id,
+            label: page.label,
+            icon: page.icon,
+            scene_id: page.scene.id,
+            scene_label: page.scene.label,
+            required_permission: page.required_permission,
+            definition: serde_json::to_string(&page.body).unwrap_or_default(),
+        })
+        .collect();
     rsx! {
         PluginApplication {
             application_label: "AIO",
-            pages,
+            pages: static_plugins.pages,
+            account_items: static_plugins.account_items,
+            runtime_pages,
+            render_runtime_page: runtime::client::render_page,
+            on_account_action: runtime::client::account_action,
             user: ApplicationUser {
-                label: "用户".to_owned(),
-                handle: String::new(),
-                initials: "U".to_owned(),
+                label: catalog.user.label,
+                handle: catalog.user.handle,
+                initials: catalog.user.initials,
             },
         }
     }

@@ -4,4 +4,4 @@ title = "AIO"
 
 [[plugins]]
 git = "https://github.com/zjarlin/aio-plugin-hello.git"
-rev = "c382f3c9c33fb553f75944539c3689c43936c19a"
+rev = "64501bbfb642c2c006de58140e359a61e4b85f2e"
