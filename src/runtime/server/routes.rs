@@ -1,4 +1,3 @@
-use aio_plugin_identity_server::SessionContext;
 use anyhow::Context as _;
 use axum::{
     Json, Router,
@@ -10,18 +9,20 @@ use axum::{
 };
 use serde::Deserialize;
 
-use super::RuntimeState;
 use super::lifecycle::{
     cleanup_new_process, cleanup_new_wasm, deactivate_bound_wasm, deactivate_previous_wasm,
     prepare_bound_wasm, prepare_process, prepare_process_revision, prepare_wasm,
     restore_process_binding, stop_previous_process,
 };
+use super::{
+    RuntimeState,
+    http_error::RuntimeError,
+    request_context::{authenticate, authenticate_manager, catalog_for, catalog_value, permitted},
+};
 use crate::runtime::{
     InstallPluginRequest, MarketplaceEntry, PageActionRequest, PageActionResult, PageBody,
-    PageDefinition, RuntimeCatalog, RuntimeResponse, UserView,
+    PageDefinition, RuntimeCatalog, RuntimeResponse,
 };
-
-const MANAGE_PERMISSION: &str = "plugin:manage";
 
 pub fn router(state: RuntimeState) -> Router {
     Router::new()
@@ -739,249 +740,6 @@ async fn add_registry(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn authenticate(
-    state: &RuntimeState,
-    headers: &HeaderMap,
-) -> Result<SessionContext, RuntimeError> {
-    state
-        .identity
-        .authenticate(headers)
-        .await?
-        .ok_or_else(|| RuntimeError::unauthorized("会话无效或已过期"))
-}
-
-async fn authenticate_manager(
-    state: &RuntimeState,
-    headers: &HeaderMap,
-) -> Result<SessionContext, RuntimeError> {
-    let session = authenticate(state, headers).await?;
-    if !session
-        .permissions
-        .iter()
-        .any(|permission| permission == MANAGE_PERMISSION)
-    {
-        return Err(RuntimeError::forbidden("当前角色没有插件管理权限"));
-    }
-    Ok(session)
-}
-
-async fn catalog_for(
-    state: &RuntimeState,
-    session: &SessionContext,
-) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
-    Ok(Json(RuntimeResponse {
-        data: catalog_value(state, session).await?,
-    }))
-}
-
-async fn catalog_value(
-    state: &RuntimeState,
-    session: &SessionContext,
-) -> Result<RuntimeCatalog, RuntimeError> {
-    let initials = session
-        .display_name
-        .chars()
-        .take(2)
-        .collect::<String>()
-        .to_uppercase();
-    let mut catalog = state
-        .store
-        .catalog(
-            &session.tenant_id,
-            &session.tenant_label,
-            UserView {
-                label: session.display_name.clone(),
-                handle: format!("@{}", session.account),
-                initials,
-            },
-        )
-        .await?;
-    catalog
-        .pages
-        .retain(|page| permitted(page.required_permission.as_deref(), &session.permissions));
-    catalog
-        .account_items
-        .retain(|item| permitted(item.required_permission.as_deref(), &session.permissions));
-    Ok(catalog)
-}
-
-fn permitted(required_permission: Option<&str>, permissions: &[String]) -> bool {
-    required_permission
-        .is_none_or(|permission| permissions.iter().any(|candidate| candidate == permission))
-}
-
-pub(super) struct RuntimeError {
-    status: StatusCode,
-    error: anyhow::Error,
-}
-
-impl RuntimeError {
-    fn bad_request(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            error: anyhow::anyhow!(message.into()),
-        }
-    }
-
-    fn unauthorized(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::UNAUTHORIZED,
-            error: anyhow::anyhow!(message.into()),
-        }
-    }
-
-    fn forbidden(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::FORBIDDEN,
-            error: anyhow::anyhow!(message.into()),
-        }
-    }
-
-    fn not_found(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            error: anyhow::anyhow!(message.into()),
-        }
-    }
-}
-
-impl<E> From<E> for RuntimeError
-where
-    E: Into<anyhow::Error>,
-{
-    fn from(value: E) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            error: value.into(),
-        }
-    }
-}
-
-impl IntoResponse for RuntimeError {
-    fn into_response(self) -> Response {
-        let message = format!("{:#}", self.error);
-        (self.status, Json(serde_json::json!({ "error": message }))).into_response()
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::runtime::{InstalledPluginView, PluginRuntime, PluginState};
-    use az_plugin_manifest::{PageActionDefinition, SceneDefinition};
-
-    fn action_page(required_permission: Option<&str>) -> PageDefinition {
-        PageDefinition {
-            id: "counter".to_owned(),
-            label: "Counter".to_owned(),
-            icon: None,
-            scene: SceneDefinition {
-                id: "examples".to_owned(),
-                label: "Examples".to_owned(),
-            },
-            required_permission: required_permission.map(str::to_owned),
-            body: PageBody::Actions {
-                title: "Counter".to_owned(),
-                content: "0".to_owned(),
-                state: [("count".to_owned(), serde_json::json!(0))]
-                    .into_iter()
-                    .collect(),
-                actions: vec![PageActionDefinition {
-                    id: "increment".to_owned(),
-                    label: "+1".to_owned(),
-                }],
-            },
-        }
-    }
-
-    #[test]
-    fn builds_manageable_entry_for_unlisted_plugin() {
-        let entry = unlisted_entry(&InstalledPluginView {
-            source_id: "source".to_owned(),
-            git: "https://github.com/example/aio-plugin-kmp.git".to_owned(),
-            revision: "0".repeat(40),
-            runtime: PluginRuntime::PageDefinition,
-            state: PluginState::Active,
-        });
-
-        assert_eq!(entry.title, "aio-plugin-kmp");
-        assert!(entry.installed);
-        assert_eq!(entry.source_id.as_deref(), Some("source"));
-        assert_eq!(entry.tags, vec!["unlisted"]);
-    }
-
-    #[test]
-    fn allows_only_declared_route_prefixes() {
-        let routes = vec!["echo".to_owned(), "jobs/status".to_owned()];
-        assert!(ensure_route_allowed(&routes, "echo").is_ok());
-        assert!(ensure_route_allowed(&routes, "echo/detail").is_ok());
-        assert!(ensure_route_allowed(&routes, "jobs/status/current").is_ok());
-        assert!(ensure_route_allowed(&routes, "jobs").is_err());
-        assert!(ensure_route_allowed(&routes, "other").is_err());
-    }
-
-    #[test]
-    fn permission_gate_rejects_ungranted_account_contributions() {
-        let permissions = vec!["workspace:view".to_owned()];
-
-        assert!(permitted(None, &permissions));
-        assert!(permitted(Some("workspace:view"), &permissions));
-        assert!(!permitted(Some("plugin:manage"), &permissions));
-    }
-
-    #[test]
-    fn allows_only_declared_page_actions_with_permission() {
-        let page = action_page(Some("counter:use"));
-        let permissions = vec!["counter:use".to_owned()];
-
-        assert!(ensure_page_action_allowed(&page, "increment", &permissions).is_ok());
-        assert!(ensure_page_action_allowed(&page, "missing", &permissions).is_err());
-        assert!(ensure_page_action_allowed(&page, "increment", &[]).is_err());
-    }
-
-    #[test]
-    fn action_result_cannot_change_published_actions() {
-        let page = action_page(None);
-        let valid = PageActionResult {
-            body: PageBody::Actions {
-                title: "Counter".to_owned(),
-                content: "1".to_owned(),
-                state: [("count".to_owned(), serde_json::json!(1))]
-                    .into_iter()
-                    .collect(),
-                actions: vec![PageActionDefinition {
-                    id: "increment".to_owned(),
-                    label: "+1".to_owned(),
-                }],
-            },
-        };
-        assert!(validate_page_action_result(&page, &valid).is_ok());
-
-        let changed = PageActionResult {
-            body: PageBody::Actions {
-                title: "Counter".to_owned(),
-                content: "1".to_owned(),
-                state: [("count".to_owned(), serde_json::json!(1))]
-                    .into_iter()
-                    .collect(),
-                actions: vec![PageActionDefinition {
-                    id: "reset".to_owned(),
-                    label: "Reset".to_owned(),
-                }],
-            },
-        };
-        assert!(validate_page_action_result(&page, &changed).is_err());
-        assert!(
-            validate_page_action_result(
-                &page,
-                &PageActionResult {
-                    body: PageBody::Text {
-                        title: "Counter".to_owned(),
-                        content: "1".to_owned(),
-                    },
-                },
-            )
-            .is_err()
-        );
-    }
-}
+#[path = "routes_tests.rs"]
+mod tests;

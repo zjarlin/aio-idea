@@ -4,7 +4,9 @@ use anyhow::{Context as _, Result, bail, ensure};
 use az_plugin_manifest::{PageDefinition, validate_page_definitions};
 use reqwest::{Method, StatusCode, Url, header};
 
-use super::supervisor::{ProcessInstance, StartProcessRequest, StopProcessRequest};
+use super::supervisor::{
+    ProcessInstance, ReconcileProcessesRequest, StartProcessRequest, StopProcessRequest,
+};
 
 const MAX_PROCESS_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -86,6 +88,23 @@ impl ProcessManager {
             return Ok(());
         }
         bail!("停止 process 插件失败: {}", response_text(response).await);
+    }
+
+    pub(super) async fn reconcile(&self, instances: Vec<StartProcessRequest>) -> Result<()> {
+        let response = self
+            .supervisor
+            .post("http://localhost/instances/reconcile")
+            .json(&ReconcileProcessesRequest { instances })
+            .send()
+            .await
+            .context("请求清理孤立 process 插件失败")?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+        bail!(
+            "清理孤立 process 插件失败: {}",
+            response_text(response).await
+        );
     }
 
     pub async fn load_pages(&self, endpoint: &str) -> Result<Vec<PageDefinition>> {

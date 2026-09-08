@@ -1,7 +1,9 @@
+mod http_error;
 mod lifecycle;
 mod page_state;
 mod process;
 mod repository;
+mod request_context;
 mod routes;
 mod store;
 mod supervisor;
@@ -120,11 +122,21 @@ impl RuntimeState {
     }
 
     async fn reconcile_processes(&self) -> Result<()> {
+        self.store.stop_orphan_process_records().await?;
         let targets = self.store.enabled_process_targets().await?;
-        if targets.is_empty() {
-            return Ok(());
-        }
         self.process.health().await?;
+        self.process
+            .reconcile(
+                targets
+                    .iter()
+                    .map(|target| supervisor::StartProcessRequest {
+                        tenant_id: target.tenant_id.clone(),
+                        source_id: target.source_id.clone(),
+                        revision: target.revision.clone(),
+                    })
+                    .collect(),
+            )
+            .await?;
         for target in targets {
             let instance = self
                 .process

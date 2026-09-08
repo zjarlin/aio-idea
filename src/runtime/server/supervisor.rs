@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env,
     net::IpAddr,
     path::{Path, PathBuf},
@@ -39,6 +40,12 @@ pub(super) struct StopProcessRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReconcileProcessesRequest {
+    pub instances: Vec<StartProcessRequest>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct ProcessInstance {
     pub instance_id: String,
     pub endpoint: String,
@@ -73,6 +80,7 @@ pub async fn run() -> Result<()> {
         .route("/health", get(|| async { "ok" }))
         .route("/instances/start", post(start))
         .route("/instances/stop", post(stop))
+        .route("/instances/reconcile", post(reconcile))
         .with_state(state);
     let listener = tokio::net::UnixListener::bind(&socket)
         .with_context(|| format!("绑定监督器 socket 失败: {}", socket.display()))?;
@@ -99,6 +107,14 @@ async fn stop(
     Json(request): Json<StopProcessRequest>,
 ) -> Result<StatusCode, SupervisorError> {
     state.docker.stop(&request.instance_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn reconcile(
+    State(state): State<SupervisorState>,
+    Json(request): Json<ReconcileProcessesRequest>,
+) -> Result<StatusCode, SupervisorError> {
+    state.docker.reconcile(&request.instances).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -204,6 +220,39 @@ impl DockerSupervisor {
         Ok(())
     }
 
+    async fn reconcile(&self, instances: &[StartProcessRequest]) -> Result<()> {
+        let mut active = HashSet::with_capacity(instances.len());
+        for instance in instances {
+            validate_start_request(instance)?;
+            active.insert(instance_id(instance));
+        }
+        let containers = docker_output([
+            "ps",
+            "--all",
+            "--filter",
+            "label=io.addzero.aio.managed=true",
+            "--format",
+            "{{.Names}}",
+        ])
+        .await?;
+        for instance_id in orphan_instance_ids(&containers, "aio-plugin-", &active) {
+            self.stop(&instance_id).await?;
+        }
+        let networks = docker_output([
+            "network",
+            "ls",
+            "--filter",
+            "label=io.addzero.aio.managed=true",
+            "--format",
+            "{{.Name}}",
+        ])
+        .await?;
+        for instance_id in orphan_instance_ids(&networks, "aio-plugin-net-", &active) {
+            ignore_missing(remove_network(&network_name(&instance_id)).await)?;
+        }
+        Ok(())
+    }
+
     async fn healthy_with_retry(&self, endpoint: &str, runtime: &RuntimeManifest) -> bool {
         for _ in 0..30 {
             if self.healthy(endpoint, runtime).await {
@@ -254,6 +303,17 @@ fn validate_instance_id(instance_id: &str) -> Result<()> {
         "进程插件实例 id 格式无效"
     );
     Ok(())
+}
+
+fn orphan_instance_ids(names: &str, prefix: &str, active: &HashSet<String>) -> Vec<String> {
+    names
+        .lines()
+        .filter_map(|name| name.trim().strip_prefix(prefix))
+        .filter(|instance_id| {
+            validate_instance_id(instance_id).is_ok() && !active.contains(*instance_id)
+        })
+        .map(str::to_owned)
+        .collect()
 }
 
 fn instance_id(request: &StartProcessRequest) -> String {
@@ -512,5 +572,18 @@ mod tests {
         ] {
             assert!(missing_docker_object(&anyhow::anyhow!(message)));
         }
+    }
+
+    #[test]
+    fn finds_only_managed_orphan_instance_names() {
+        let active = ["0123456789abcdef01234567".to_owned()]
+            .into_iter()
+            .collect();
+        let names = "aio-plugin-0123456789abcdef01234567\naio-plugin-89abcdef0123456789abcdef\naio-plugin-invalid\nother-89abcdef0123456789abcdef";
+
+        assert_eq!(
+            orphan_instance_ids(names, "aio-plugin-", &active),
+            vec!["89abcdef0123456789abcdef"]
+        );
     }
 }

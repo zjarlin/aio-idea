@@ -548,6 +548,15 @@ impl PluginStore {
             .collect()
     }
 
+    pub async fn stop_orphan_process_records(&self) -> Result<()> {
+        sqlx::query(
+            "UPDATE plugin_runtime_instances instances SET state = 'stopped', stopped_at = now() WHERE instances.state = 'active' AND instances.runtime_handle IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tenant_plugin_bindings bindings JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.tenant_id = instances.tenant_id AND bindings.revision_id = instances.revision_id AND bindings.enabled = TRUE AND revisions.runtime = 'process')",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn enabled_wasm_targets(&self) -> Result<Vec<WasmTarget>> {
         let rows = sqlx::query(
             "SELECT bindings.tenant_id, bindings.source_id, revisions.id, revisions.revision, revisions.manifest->'runtime'->>'artifact' AS artifact FROM tenant_plugin_bindings bindings JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.enabled = TRUE AND revisions.runtime = 'wasm-component' ORDER BY bindings.tenant_id, bindings.source_id",
