@@ -11,6 +11,10 @@ use axum::{
 use serde::Deserialize;
 
 use super::RuntimeState;
+use super::lifecycle::{
+    cleanup_new_wasm, deactivate_bound_wasm, deactivate_previous_wasm, prepare_bound_wasm,
+    prepare_process, prepare_process_revision, prepare_wasm, stop_previous_process,
+};
 use crate::runtime::{
     InstallPluginRequest, MarketplaceEntry, RuntimeCatalog, RuntimeResponse, UserView,
 };
@@ -55,26 +59,53 @@ async fn install(
     if let Some(source_id) = state.store.source_id(&discovered.git).await? {
         discovered.source_id = source_id;
     }
+    let current_revision = discovered.revision.clone();
     let previous = state
         .store
         .active_process(&session.tenant_id, &discovered.source_id)
+        .await?;
+    let previous_wasm = state
+        .store
+        .active_wasm_revision(&session.tenant_id, &discovered.source_id)
         .await?;
     let instance = if discovered.runtime == crate::runtime::PluginRuntime::Process {
         Some(prepare_process(&state, &session.tenant_id, &mut discovered).await?)
     } else {
         None
     };
+    let wasm = if discovered.runtime == crate::runtime::PluginRuntime::WasmComponent {
+        Some(prepare_wasm(&state, &session.tenant_id, &mut discovered).await?)
+    } else {
+        None
+    };
+    let source_id = discovered.source_id.clone();
     if let Err(error) = state
         .store
         .activate(&session.tenant_id, discovered, instance.as_ref())
         .await
     {
-        if let Some(instance) = &instance {
+        if let Some(instance) = &instance
+            && instance.created
+        {
             let _ = state.process.stop(&instance.instance_id).await;
         }
+        cleanup_new_wasm(
+            &state,
+            &session.tenant_id,
+            &source_id,
+            &current_revision,
+            wasm.as_ref(),
+        )?;
         return Err(error.into());
     }
     stop_previous_process(&state, previous, instance.as_ref()).await?;
+    deactivate_previous_wasm(
+        &state,
+        &session.tenant_id,
+        &source_id,
+        previous_wasm.as_deref(),
+        wasm.as_ref().map(|_| current_revision.as_str()),
+    )?;
     catalog_for(&state, &session).await
 }
 
@@ -97,14 +128,28 @@ async fn enable(
     } else {
         None
     };
+    let wasm = if target.runtime == crate::runtime::PluginRuntime::WasmComponent {
+        Some(prepare_bound_wasm(&state, &session.tenant_id, &source_id, &target).await?)
+    } else {
+        None
+    };
     if let Err(error) = state
         .store
         .set_enabled(&session.tenant_id, &source_id, true, instance.as_ref())
         .await
     {
-        if let Some(instance) = &instance {
+        if let Some(instance) = &instance
+            && instance.created
+        {
             let _ = state.process.stop(&instance.instance_id).await;
         }
+        cleanup_new_wasm(
+            &state,
+            &session.tenant_id,
+            &source_id,
+            &target.revision,
+            wasm.as_ref(),
+        )?;
         return Err(error.into());
     }
     catalog_for(&state, &session).await
@@ -120,6 +165,10 @@ async fn disable(
         .store
         .active_process(&session.tenant_id, &source_id)
         .await?;
+    let target = state
+        .store
+        .bound_runtime(&session.tenant_id, &source_id)
+        .await?;
     state
         .store
         .set_enabled(&session.tenant_id, &source_id, false, None)
@@ -127,6 +176,7 @@ async fn disable(
     if let Some(previous) = previous {
         state.process.stop(&previous.instance_id).await?;
     }
+    deactivate_bound_wasm(&state, &session.tenant_id, &source_id, &target)?;
     catalog_for(&state, &session).await
 }
 
@@ -140,6 +190,10 @@ async fn uninstall(
         .store
         .active_process(&session.tenant_id, &source_id)
         .await?;
+    let target = state
+        .store
+        .bound_runtime(&session.tenant_id, &source_id)
+        .await?;
     state
         .store
         .uninstall(&session.tenant_id, &source_id)
@@ -147,6 +201,7 @@ async fn uninstall(
     if let Some(previous) = previous {
         state.process.stop(&previous.instance_id).await?;
     }
+    deactivate_bound_wasm(&state, &session.tenant_id, &source_id, &target)?;
     catalog_for(&state, &session).await
 }
 
@@ -159,6 +214,10 @@ async fn rollback(
     let previous = state
         .store
         .active_process(&session.tenant_id, &source_id)
+        .await?;
+    let previous_wasm = state
+        .store
+        .active_wasm_revision(&session.tenant_id, &source_id)
         .await?;
     let target = state
         .store
@@ -173,17 +232,38 @@ async fn rollback(
     } else {
         None
     };
+    let wasm = if target.runtime == crate::runtime::PluginRuntime::WasmComponent {
+        Some(prepare_bound_wasm(&state, &session.tenant_id, &source_id, &target).await?)
+    } else {
+        None
+    };
     if let Err(error) = state
         .store
         .rollback_to(&session.tenant_id, &source_id, &target, instance.as_ref())
         .await
     {
-        if let Some(instance) = &instance {
+        if let Some(instance) = &instance
+            && instance.created
+        {
             let _ = state.process.stop(&instance.instance_id).await;
         }
+        cleanup_new_wasm(
+            &state,
+            &session.tenant_id,
+            &source_id,
+            &target.revision,
+            wasm.as_ref(),
+        )?;
         return Err(error.into());
     }
     stop_previous_process(&state, previous, instance.as_ref()).await?;
+    deactivate_previous_wasm(
+        &state,
+        &session.tenant_id,
+        &source_id,
+        previous_wasm.as_deref(),
+        wasm.as_ref().map(|_| target.revision.as_str()),
+    )?;
     catalog_for(&state, &session).await
 }
 
@@ -280,9 +360,6 @@ async fn service(
     let path = format!("/{path}");
     match binding.runtime {
         crate::runtime::PluginRuntime::WasmComponent => {
-            let artifact = state
-                .repository
-                .artifact(&binding.revision, &binding.artifact)?;
             let body = String::from_utf8(body.to_vec())
                 .map_err(|_| RuntimeError::bad_request("Wasm Component 请求体必须是 UTF-8"))?;
             let request = serde_json::json!({
@@ -294,12 +371,16 @@ async fn service(
                 "user_id": session.user_id,
             })
             .to_string();
-            let output =
-                tokio::task::spawn_blocking(move || super::wasm::handle(&artifact, request))
-                    .await
-                    .map_err(|error| {
-                        RuntimeError::bad_request(format!("等待 Wasm 请求处理失败: {error}"))
-                    })??;
+            let manager = state.wasm.clone();
+            let tenant_id = session.tenant_id.clone();
+            let revision = binding.revision.clone();
+            let output = tokio::task::spawn_blocking(move || {
+                manager.handle(&tenant_id, &source_id, &revision, request)
+            })
+            .await
+            .map_err(|error| {
+                RuntimeError::bad_request(format!("等待 Wasm 请求处理失败: {error}"))
+            })??;
             let status = StatusCode::from_u16(output.status)
                 .map_err(|_| RuntimeError::bad_request("Wasm Component 返回了无效状态码"))?;
             response(status, Some(&output.content_type), output.body.into_bytes())
@@ -329,59 +410,6 @@ async fn service(
         }
         _ => Err(RuntimeError::not_found("当前插件不提供动态服务")),
     }
-}
-
-async fn prepare_process(
-    state: &RuntimeState,
-    tenant_id: &str,
-    plugin: &mut super::repository::DiscoveredPlugin,
-) -> Result<super::supervisor::ProcessInstance, RuntimeError> {
-    let (instance, pages) =
-        prepare_process_revision(state, tenant_id, &plugin.source_id, &plugin.revision).await?;
-    plugin.pages = pages;
-    Ok(instance)
-}
-
-async fn prepare_process_revision(
-    state: &RuntimeState,
-    tenant_id: &str,
-    source_id: &str,
-    revision: &str,
-) -> Result<
-    (
-        super::supervisor::ProcessInstance,
-        Vec<az_plugin_manifest::PageDefinition>,
-    ),
-    RuntimeError,
-> {
-    state.process.health().await?;
-    let instance = state.process.start(tenant_id, source_id, revision).await?;
-    let validation = async {
-        let pages = state.process.load_pages(&instance.endpoint).await?;
-        state.repository.validate_pages(revision, &pages)?;
-        Ok::<_, anyhow::Error>(pages)
-    }
-    .await;
-    match validation {
-        Ok(pages) => Ok((instance, pages)),
-        Err(error) => {
-            let _ = state.process.stop(&instance.instance_id).await;
-            Err(error.into())
-        }
-    }
-}
-
-async fn stop_previous_process(
-    state: &RuntimeState,
-    previous: Option<super::store::ProcessBinding>,
-    current: Option<&super::supervisor::ProcessInstance>,
-) -> Result<(), RuntimeError> {
-    if let Some(previous) = previous
-        && current.is_none_or(|current| current.instance_id != previous.instance_id)
-    {
-        state.process.stop(&previous.instance_id).await?;
-    }
-    Ok(())
 }
 
 fn ensure_route_allowed(routes: &[String], path: &str) -> Result<(), RuntimeError> {
@@ -499,7 +527,7 @@ async fn catalog_value(
     Ok(catalog)
 }
 
-struct RuntimeError {
+pub(super) struct RuntimeError {
     status: StatusCode,
     error: anyhow::Error,
 }

@@ -18,6 +18,7 @@ Environment=AIO_PLUGIN_SUPERVISOR_SOCKET=/run/aio-plugin-supervisor/supervisor.s
 Environment=AIO_SESSION_SECURE=1
 Environment=AIO_PASSWORD_MIN_LENGTH=8
 ExecStart=/opt/aio-public-shell/current/aio-public-shell
+TimeoutStartSec=300
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true

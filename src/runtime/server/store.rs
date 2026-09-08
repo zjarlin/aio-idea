@@ -75,12 +75,12 @@ pub struct BoundRuntime {
     pub revision_id: String,
     pub revision: String,
     pub runtime: PluginRuntime,
+    pub artifact: String,
 }
 
 pub struct ServiceBinding {
     pub runtime: PluginRuntime,
     pub revision: String,
-    pub artifact: String,
     pub endpoint: Option<String>,
     pub routes: Vec<String>,
 }
@@ -90,6 +90,14 @@ pub struct ProcessTarget {
     pub source_id: String,
     pub revision_id: String,
     pub revision: String,
+}
+
+pub struct WasmTarget {
+    pub tenant_id: String,
+    pub source_id: String,
+    pub revision_id: String,
+    pub revision: String,
+    pub artifact: String,
 }
 
 impl PluginStore {
@@ -275,7 +283,7 @@ impl PluginStore {
 
     pub async fn rollback_target(&self, tenant_id: &str, source_id: &str) -> Result<BoundRuntime> {
         let row = sqlx::query(
-            "SELECT revisions.id, revisions.revision, revisions.runtime FROM plugin_revisions revisions JOIN tenant_plugin_bindings bindings ON bindings.source_id = revisions.source_id WHERE bindings.tenant_id = $1 AND bindings.source_id = $2 AND revisions.id <> bindings.revision_id ORDER BY revisions.created_at DESC LIMIT 1",
+            "SELECT revisions.id, revisions.revision, revisions.runtime, revisions.manifest->'runtime'->>'artifact' AS artifact FROM plugin_revisions revisions JOIN tenant_plugin_bindings bindings ON bindings.source_id = revisions.source_id WHERE bindings.tenant_id = $1 AND bindings.source_id = $2 AND revisions.id <> bindings.revision_id ORDER BY revisions.created_at DESC LIMIT 1",
         )
         .bind(tenant_id)
         .bind(source_id)
@@ -286,6 +294,7 @@ impl PluginStore {
             revision_id: row.try_get("id")?,
             revision: row.try_get("revision")?,
             runtime: parse_runtime(row.try_get("runtime")?)?,
+            artifact: row.try_get("artifact")?,
         })
     }
 
@@ -340,14 +349,13 @@ impl PluginStore {
         .await?;
         row.map(|row| {
             let manifest = serde_json::from_value::<PluginManifest>(row.try_get("manifest")?)?;
-            let runtime = manifest
+            manifest
                 .runtime
                 .as_ref()
                 .context("活动服务插件缺少 runtime 清单")?;
             Ok(ServiceBinding {
                 runtime: parse_runtime(row.try_get("runtime")?)?,
                 revision: row.try_get("revision")?,
-                artifact: runtime.artifact.clone(),
                 endpoint: row.try_get("endpoint")?,
                 routes: manifest
                     .subplugins
@@ -361,7 +369,7 @@ impl PluginStore {
 
     pub async fn bound_runtime(&self, tenant_id: &str, source_id: &str) -> Result<BoundRuntime> {
         let row = sqlx::query(
-            "SELECT revisions.id, revisions.revision, revisions.runtime FROM tenant_plugin_bindings bindings JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.tenant_id = $1 AND bindings.source_id = $2",
+            "SELECT revisions.id, revisions.revision, revisions.runtime, revisions.manifest->'runtime'->>'artifact' AS artifact FROM tenant_plugin_bindings bindings JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.tenant_id = $1 AND bindings.source_id = $2",
         )
         .bind(tenant_id)
         .bind(source_id)
@@ -372,7 +380,23 @@ impl PluginStore {
             revision_id: row.try_get("id")?,
             revision: row.try_get("revision")?,
             runtime: parse_runtime(row.try_get("runtime")?)?,
+            artifact: row.try_get("artifact")?,
         })
+    }
+
+    pub async fn active_wasm_revision(
+        &self,
+        tenant_id: &str,
+        source_id: &str,
+    ) -> Result<Option<String>> {
+        sqlx::query_scalar(
+            "SELECT revisions.revision FROM tenant_plugin_bindings bindings JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.tenant_id = $1 AND bindings.source_id = $2 AND bindings.enabled = TRUE AND revisions.runtime = 'wasm-component'",
+        )
+        .bind(tenant_id)
+        .bind(source_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Into::into)
     }
 
     pub async fn active_process(
@@ -415,6 +439,25 @@ impl PluginStore {
             .collect()
     }
 
+    pub async fn enabled_wasm_targets(&self) -> Result<Vec<WasmTarget>> {
+        let rows = sqlx::query(
+            "SELECT bindings.tenant_id, bindings.source_id, revisions.id, revisions.revision, revisions.manifest->'runtime'->>'artifact' AS artifact FROM tenant_plugin_bindings bindings JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.enabled = TRUE AND revisions.runtime = 'wasm-component' ORDER BY bindings.tenant_id, bindings.source_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(WasmTarget {
+                    tenant_id: row.try_get("tenant_id")?,
+                    source_id: row.try_get("source_id")?,
+                    revision_id: row.try_get("id")?,
+                    revision: row.try_get("revision")?,
+                    artifact: row.try_get("artifact")?,
+                })
+            })
+            .collect()
+    }
+
     pub async fn verify_revision_pages(
         &self,
         revision_id: &str,
@@ -427,10 +470,7 @@ impl PluginStore {
                 .await?
                 .context("插件 revision 不存在")?;
         let stored = serde_json::from_value::<Vec<PageDefinition>>(stored)?;
-        ensure!(
-            stored == pages,
-            "process 插件重启后 PageDefinition 发生漂移"
-        );
+        ensure!(stored == pages, "运行时插件重启后 PageDefinition 发生漂移");
         Ok(())
     }
 
@@ -455,6 +495,29 @@ impl PluginStore {
             Some(&target.revision_id),
             "recover",
             "宿主启动时已恢复 process 插件实例",
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn recover_wasm_instance(&self, target: &WasmTarget) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        stop_instances(&mut transaction, &target.tenant_id, &target.source_id).await?;
+        start_instance(
+            &mut transaction,
+            &target.tenant_id,
+            &target.revision_id,
+            None,
+        )
+        .await?;
+        record_event(
+            &mut transaction,
+            &target.tenant_id,
+            &target.source_id,
+            Some(&target.revision_id),
+            "recover",
+            "宿主启动时已恢复租户 Wasm Component 实例",
         )
         .await?;
         transaction.commit().await?;

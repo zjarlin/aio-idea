@@ -42,6 +42,7 @@ pub(super) struct StopProcessRequest {
 pub(crate) struct ProcessInstance {
     pub instance_id: String,
     pub endpoint: String,
+    pub created: bool,
 }
 
 #[derive(Clone)]
@@ -154,6 +155,7 @@ impl DockerSupervisor {
                 return Ok(ProcessInstance {
                     instance_id,
                     endpoint,
+                    created: false,
                 });
             }
             self.stop(&instance_id).await?;
@@ -185,6 +187,7 @@ impl DockerSupervisor {
             return Ok(ProcessInstance {
                 instance_id,
                 endpoint,
+                created: true,
             });
         }
         let logs = docker_output(["logs", "--tail", "80", &container_name(&instance_id)])

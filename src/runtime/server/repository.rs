@@ -27,6 +27,7 @@ pub struct DiscoveredPlugin {
     pub runtime: PluginRuntime,
     pub manifest: Value,
     pub pages: Vec<PageDefinition>,
+    pub artifact: String,
 }
 
 pub struct RepositoryInstaller {
@@ -96,18 +97,13 @@ impl RepositoryInstaller {
                     })?,
                 )
                 .context("解析 PageDefinition 失败")?,
-                PluginRuntime::WasmComponent => {
-                    let artifact = artifact.clone();
-                    tokio::task::spawn_blocking(move || super::wasm::load_pages(&artifact))
-                        .await
-                        .context("等待 Wasm Component 验证失败")??
-                }
+                PluginRuntime::WasmComponent => Vec::new(),
                 PluginRuntime::Process => Vec::new(),
                 PluginRuntime::RustSource => {
                     anyhow::bail!("rust-source 插件必须通过整套发布切换")
                 }
             };
-            if runtime_kind != PluginRuntime::Process {
+            if runtime_kind == PluginRuntime::PageDefinition {
                 validate_page_definitions(&pages)?;
                 validate_declared_pages(&manifest, &pages)?;
             }
@@ -126,6 +122,7 @@ impl RepositoryInstaller {
                 runtime: runtime_kind,
                 manifest: serde_json::to_value(&manifest.plugin)?,
                 pages,
+                artifact: runtime.artifact.clone(),
             })
         }
         .await;
