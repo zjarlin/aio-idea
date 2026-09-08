@@ -54,7 +54,7 @@ cp aio.toml "$release/aio.toml"
 readonly incoming="$deploy_root/releases/.incoming-$revision"
 readonly remote_release="$deploy_root/releases/$revision"
 
-ssh "$deploy_host" "set -euo pipefail
+ssh "$deploy_host" "set -eu
 test ! -e '$remote_release'
 rm -rf '$incoming'
 mkdir -p '$incoming'"
@@ -62,7 +62,7 @@ print "上传候选发布物"
 tar -C "$release" -cf - . | ssh "$deploy_host" "tar -C '$incoming' -xf -"
 
 print "切换 252 发布物"
-ssh "$deploy_host" "set -euo pipefail
+ssh "$deploy_host" "set -eu
 deploy_root='$deploy_root'
 incoming='$incoming'
 remote_release='$remote_release'
