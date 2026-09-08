@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+export COPYFILE_DISABLE=1
+
 readonly deploy_host="${AIO_DEPLOY_HOST:-root@192.168.31.252}"
 readonly deploy_root="${AIO_DEPLOY_ROOT:-/opt/aio-public-shell}"
 readonly target="x86_64-unknown-linux-gnu.2.17"
@@ -48,7 +50,7 @@ dx build --platform web --release
 readonly release="$artifact/release"
 mkdir -p "$release"
 cp "$CARGO_TARGET_DIR/$target_directory/release/aio-public-shell" "$release/aio-public-shell"
-cp -R target/dx/aio-public-shell/release/web "$release/web"
+cp -R target/dx/aio-public-shell/release/web/public "$release/web"
 cp aio.toml "$release/aio.toml"
 
 readonly incoming="$deploy_root/releases/.incoming-$revision"
