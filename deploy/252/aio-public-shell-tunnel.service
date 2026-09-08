@@ -1,0 +1,20 @@
+[Unit]
+Description=Cloudflare Tunnel for AIO public plugin shell
+After=network-online.target aio-public-shell.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aio-shell
+Group=aio-shell
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --config /opt/aio-public-shell/cloudflared/config.yml run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

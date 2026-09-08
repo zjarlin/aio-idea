@@ -1,0 +1,23 @@
+[Unit]
+Description=AIO public plugin shell
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aio-shell
+Group=aio-shell
+WorkingDirectory=/opt/aio-public-shell/current
+Environment=AIO_WEB_PORT=3080
+Environment=AIO_WEB_DIST=/opt/aio-public-shell/current/web
+ExecStart=/opt/aio-public-shell/current/aio-public-shell
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

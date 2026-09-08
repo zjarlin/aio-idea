@@ -1,0 +1,9 @@
+tunnel: 4be41351-a4ef-4ce2-9ef2-f573946fcfcf
+credentials-file: /opt/aio-public-shell/cloudflared/credentials.json
+protocol: quic
+metrics: 127.0.0.1:20243
+
+ingress:
+  - hostname: aio.addzero.site
+    service: http://127.0.0.1:3080
+  - service: http_status:404
