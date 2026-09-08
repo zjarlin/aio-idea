@@ -1,20 +1,22 @@
 use std::{
     env,
     io::Cursor,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
 };
 
 use anyhow::{Context as _, Result, ensure};
+use az_plugin_manifest::{
+    artifact_path, read_manifest, validate_declared_pages, validate_host_compatibility,
+    validate_page_definitions, validate_repository,
+};
 use flate2::read::GzDecoder;
 use serde_json::Value;
 use tar::Archive;
 use tokio::process::Command;
 
 use crate::runtime::{MarketplaceEntry, PageDefinition, PluginRuntime};
-
-use super::manifest;
 
 const MAX_ARCHIVE_BYTES: u64 = 32 * 1024 * 1024;
 
@@ -69,13 +71,25 @@ impl RepositoryInstaller {
                 resolved.len() == 40 && resolved.bytes().all(|byte| byte.is_ascii_hexdigit()),
                 "Git 未解析出完整提交 SHA"
             );
-            let manifest_path = checkout_root.join("aio-plugin.toml");
-            let manifest_text = tokio::fs::read_to_string(&manifest_path)
-                .await
-                .with_context(|| format!("读取插件清单失败: {}", manifest_path.display()))?;
-            let manifest = manifest::parse(&manifest_text)?;
-            let artifact = safe_artifact(&checkout_root, &manifest.plugin.runtime.artifact)?;
-            let pages = match manifest.plugin.runtime.kind {
+            let manifest = read_manifest(&checkout_root)?;
+            validate_host_compatibility(&manifest, env!("CARGO_PKG_VERSION"))?;
+            let report = validate_repository(&checkout_root)?;
+            let runtime = manifest
+                .plugin
+                .runtime
+                .as_ref()
+                .context("公网宿主只接受声明 plugin.runtime 的插件")?;
+            let runtime_kind = runtime.kind;
+            if runtime_kind == PluginRuntime::WasmComponent {
+                ensure!(
+                    manifest.plugin.capabilities.network.is_empty()
+                        && manifest.plugin.capabilities.filesystem.is_empty()
+                        && !manifest.plugin.capabilities.database,
+                    "当前 Wasm Component 宿主未授予网络、文件系统或数据库能力"
+                );
+            }
+            let artifact = report.artifact.context("运行时插件缺少 artifact")?;
+            let pages = match runtime_kind {
                 PluginRuntime::PageDefinition => serde_json::from_slice::<Vec<PageDefinition>>(
                     &tokio::fs::read(&artifact).await.with_context(|| {
                         format!("读取 PageDefinition 失败: {}", artifact.display())
@@ -93,7 +107,8 @@ impl RepositoryInstaller {
                     anyhow::bail!("rust-source 插件必须通过整套发布切换")
                 }
             };
-            validate_pages(&pages)?;
+            validate_page_definitions(&pages)?;
+            validate_declared_pages(&manifest, &pages)?;
             let final_directory = self.cache_root.join(&resolved);
             if final_directory.exists() {
                 tokio::fs::remove_dir_all(&staging).await?;
@@ -106,7 +121,7 @@ impl RepositoryInstaller {
                 source_id: uuid::Uuid::new_v4().to_string(),
                 git: git.to_owned(),
                 revision: resolved,
-                runtime: manifest.plugin.runtime.kind,
+                runtime: runtime_kind,
                 manifest: serde_json::to_value(&manifest.plugin)?,
                 pages,
             })
@@ -167,7 +182,7 @@ impl RepositoryInstaller {
             revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
             "插件 revision 必须是完整提交 SHA"
         );
-        safe_artifact(&self.cache_root.join(revision), relative)
+        artifact_path(&self.cache_root.join(revision), relative)
     }
 }
 
@@ -282,41 +297,6 @@ fn validate_git(git: &str) -> Result<()> {
         !git.contains(char::is_whitespace),
         "插件 Git 地址不能包含空白字符"
     );
-    Ok(())
-}
-
-fn safe_artifact(root: &Path, relative: &str) -> Result<PathBuf> {
-    let path = Path::new(relative);
-    ensure!(
-        !path.is_absolute()
-            && path
-                .components()
-                .all(|component| matches!(component, Component::Normal(_))),
-        "插件 artifact 必须是仓库内相对路径"
-    );
-    let artifact = root.join(path);
-    ensure!(artifact.is_file(), "插件 artifact 不存在: {relative}");
-    Ok(artifact)
-}
-
-fn validate_pages(pages: &[PageDefinition]) -> Result<()> {
-    ensure!(!pages.is_empty(), "插件至少需要贡献一个页面");
-    let mut ids = std::collections::HashSet::new();
-    for page in pages {
-        ensure!(
-            !page.id.trim().is_empty() && !page.label.trim().is_empty(),
-            "插件页面 id 和标题不能为空"
-        );
-        ensure!(
-            !page.scene.id.trim().is_empty() && !page.scene.label.trim().is_empty(),
-            "插件页面场景不能为空"
-        );
-        ensure!(
-            ids.insert(page.id.as_str()),
-            "插件页面 id 重复: {}",
-            page.id
-        );
-    }
     Ok(())
 }
 

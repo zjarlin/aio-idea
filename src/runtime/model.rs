@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(feature = "web", feature = "desktop"))]
+pub use az_plugin_manifest::PageBody;
+pub use az_plugin_manifest::{PageDefinition, PluginRuntime};
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeCatalog {
     pub tenant: TenantView,
@@ -22,45 +26,12 @@ pub struct UserView {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PageDefinition {
-    pub id: String,
-    pub label: String,
-    pub icon: Option<String>,
-    pub scene: SceneDefinition,
-    #[serde(default)]
-    pub required_permission: Option<String>,
-    pub body: PageBody,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SceneDefinition {
-    pub id: String,
-    pub label: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum PageBody {
-    Counter { title: String, button: String },
-    Text { title: String, content: String },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InstalledPluginView {
     pub source_id: String,
     pub git: String,
     pub revision: String,
     pub runtime: PluginRuntime,
     pub state: PluginState,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PluginRuntime {
-    PageDefinition,
-    WasmComponent,
-    Process,
-    RustSource,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

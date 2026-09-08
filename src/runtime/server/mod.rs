@@ -1,4 +1,3 @@
-mod manifest;
 mod repository;
 mod routes;
 mod store;

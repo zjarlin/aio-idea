@@ -1,6 +1,6 @@
 [package]
 name = "aio-public-shell"
-version = "0.1.0"
+version = "2026.9.8"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
@@ -11,6 +11,7 @@ dill = "0.15.0"
 dioxus = { version = "=0.7.9", default-features = false, features = ["macro", "html", "signals"], optional = true }
 az-dioxus-admin-shell = { git = "https://github.com/zjarlin/dioxus-admin-workbench.git", rev = "aa19101b1d0739a0c6f0df99677c1ba3483a746d", default-features = false, optional = true }
 az-ui-components = { git = "https://github.com/zjarlin/dioxus-admin-workbench.git", rev = "aa19101b1d0739a0c6f0df99677c1ba3483a746d", optional = true }
+az-plugin-manifest = { git = "https://github.com/zjarlin/aio.git", rev = "745631cc42ff5805791d377ea3f1855c90ae1567", default-features = false }
 gloo-net = { version = "0.6.0", features = ["http", "json"], optional = true }
 flate2 = { version = "1.1.2", optional = true }
 reqwest = { version = "0.12.23", default-features = false, features = ["json", "rustls-tls"], optional = true }
@@ -40,7 +41,7 @@ default = ["web"]
 ui = ["dep:dioxus", "dep:az-dioxus-admin-shell", "dep:az-ui-components"]
 web = ["ui", "dioxus/web", "dioxus/launch", "dep:gloo-net", "dep:web-sys", "dep:aio_plugin_account", "dep:aio_plugin_identity_client", "dep:aio_plugin_marketplace_client", "dep:aio_plugin_rbac_client", "dep:aio_plugin_settings", "dep:aio_plugin_tenant_client"]
 desktop = ["ui", "dioxus/desktop", "dioxus/launch", "dep:aio_plugin_account", "dep:aio_plugin_identity_client", "dep:aio_plugin_marketplace_client", "dep:aio_plugin_rbac_client", "dep:aio_plugin_settings", "dep:aio_plugin_tenant_client"]
-server = ["dep:axum", "dep:flate2", "dep:reqwest", "dep:sqlx", "dep:tar", "dep:tokio", "dep:toml", "dep:tower-http", "dep:uuid", "dep:wasmtime", "dep:aio_plugin_identity_server", "dep:aio_plugin_marketplace_server", "dep:aio_plugin_rbac_server", "dep:aio_plugin_tenant_server"]
+server = ["az-plugin-manifest/validation", "dep:axum", "dep:flate2", "dep:reqwest", "dep:sqlx", "dep:tar", "dep:tokio", "dep:toml", "dep:tower-http", "dep:uuid", "dep:wasmtime", "dep:aio_plugin_identity_server", "dep:aio_plugin_marketplace_server", "dep:aio_plugin_rbac_server", "dep:aio_plugin_tenant_server"]
 
 [lints.rust]
 unsafe_code = "forbid"
