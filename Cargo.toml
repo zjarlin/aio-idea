@@ -1,0 +1,26 @@
+[package]
+name = "aio-public-shell"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0.99"
+axum = { version = "0.8.6", optional = true }
+dill = "0.15.0"
+dioxus = { version = "=0.7.9", default-features = false, features = ["macro", "html", "signals"], optional = true }
+az-dioxus-admin-shell = { git = "https://github.com/zjarlin/dioxus-admin-workbench.git", rev = "b2d33b9eb404ef06e924eb658403cd3b55d98c98", default-features = false, optional = true }
+tokio = { version = "1.47.1", features = ["macros", "net", "rt-multi-thread"], optional = true }
+tower-http = { version = "0.6.2", features = ["fs"], optional = true }
+aio_plugin_hello_client = { package = "aio-plugin-hello-client", git = "https://github.com/zjarlin/aio-plugin-hello.git", rev = "c382f3c9c33fb553f75944539c3689c43936c19a", optional = true }
+aio_plugin_hello_server = { package = "aio-plugin-hello-server", git = "https://github.com/zjarlin/aio-plugin-hello.git", rev = "c382f3c9c33fb553f75944539c3689c43936c19a", optional = true }
+
+[features]
+default = ["web"]
+ui = ["dep:dioxus", "dep:az-dioxus-admin-shell"]
+web = ["ui", "dioxus/web", "dioxus/launch", "dep:aio_plugin_hello_client"]
+desktop = ["ui", "dioxus/desktop", "dioxus/launch", "dep:aio_plugin_hello_client"]
+server = ["dep:axum", "dep:tokio", "dep:tower-http", "dep:aio_plugin_hello_server"]
+
+[lints.rust]
+unsafe_code = "forbid"

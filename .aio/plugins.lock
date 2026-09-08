@@ -1,0 +1,14 @@
+[[plugins]]
+git = "https://github.com/zjarlin/aio-plugin-hello.git"
+revision = "c382f3c9c33fb553f75944539c3689c43936c19a"
+directory = "aio-plugin-hello-65fb1dfe"
+
+[plugins.client]
+package = "aio-plugin-hello-client"
+dependency = "aio_plugin_hello_client"
+package_path = "client"
+
+[plugins.server]
+package = "aio-plugin-hello-server"
+dependency = "aio_plugin_hello_server"
+package_path = "server"
