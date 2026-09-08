@@ -587,17 +587,18 @@ async fn catalog_value(
             },
         )
         .await?;
-    catalog.pages.retain(|page| {
-        page.required_permission
-            .as_deref()
-            .is_none_or(|permission| {
-                session
-                    .permissions
-                    .iter()
-                    .any(|candidate| candidate == permission)
-            })
-    });
+    catalog
+        .pages
+        .retain(|page| permitted(page.required_permission.as_deref(), &session.permissions));
+    catalog
+        .account_items
+        .retain(|item| permitted(item.required_permission.as_deref(), &session.permissions));
     Ok(catalog)
+}
+
+fn permitted(required_permission: Option<&str>, permissions: &[String]) -> bool {
+    required_permission
+        .is_none_or(|permission| permissions.iter().any(|candidate| candidate == permission))
 }
 
 pub(super) struct RuntimeError {
@@ -683,5 +684,14 @@ mod tests {
         assert!(ensure_route_allowed(&routes, "jobs/status/current").is_ok());
         assert!(ensure_route_allowed(&routes, "jobs").is_err());
         assert!(ensure_route_allowed(&routes, "other").is_err());
+    }
+
+    #[test]
+    fn permission_gate_rejects_ungranted_account_contributions() {
+        let permissions = vec!["workspace:view".to_owned()];
+
+        assert!(permitted(None, &permissions));
+        assert!(permitted(Some("workspace:view"), &permissions));
+        assert!(!permitted(Some("plugin:manage"), &permissions));
     }
 }
