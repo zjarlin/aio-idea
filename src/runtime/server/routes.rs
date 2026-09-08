@@ -147,7 +147,39 @@ async fn marketplace(
             }
         }
     }
+    for plugin in &catalog.plugins {
+        if !entries
+            .iter()
+            .any(|entry: &MarketplaceEntry| entry.git == plugin.git)
+        {
+            entries.push(unlisted_entry(plugin));
+        }
+    }
     Ok(Json(RuntimeResponse { data: entries }))
+}
+
+fn unlisted_entry(plugin: &crate::runtime::InstalledPluginView) -> MarketplaceEntry {
+    let title = plugin
+        .git
+        .trim_end_matches(".git")
+        .rsplit('/')
+        .next()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Git plugin")
+        .to_owned();
+    MarketplaceEntry {
+        git: plugin.git.clone(),
+        rev: plugin.revision.clone(),
+        title,
+        summary: "当前租户直接安装的未收录 Git 插件。".to_owned(),
+        license: "未收录".to_owned(),
+        tags: vec!["unlisted".to_owned()],
+        installed: true,
+        source_id: Some(plugin.source_id.clone()),
+        state: Some(plugin.state),
+        active_revision: Some(plugin.revision.clone()),
+        runtime: Some(plugin.runtime),
+    }
 }
 
 async fn component(
@@ -330,5 +362,27 @@ impl IntoResponse for RuntimeError {
     fn into_response(self) -> Response {
         let message = format!("{:#}", self.error);
         (self.status, Json(serde_json::json!({ "error": message }))).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{InstalledPluginView, PluginRuntime, PluginState};
+
+    #[test]
+    fn builds_manageable_entry_for_unlisted_plugin() {
+        let entry = unlisted_entry(&InstalledPluginView {
+            source_id: "source".to_owned(),
+            git: "https://github.com/example/aio-plugin-kmp.git".to_owned(),
+            revision: "0".repeat(40),
+            runtime: PluginRuntime::PageDefinition,
+            state: PluginState::Active,
+        });
+
+        assert_eq!(entry.title, "aio-plugin-kmp");
+        assert!(entry.installed);
+        assert_eq!(entry.source_id.as_deref(), Some("source"));
+        assert_eq!(entry.tags, vec!["unlisted"]);
     }
 }
