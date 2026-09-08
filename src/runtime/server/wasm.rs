@@ -295,6 +295,32 @@ mod tests {
         assert_eq!(response.status, 200);
         assert!(response.body.contains("tenant-a"));
 
+        let action = |tenant_id: &str| {
+            manager.handle(
+                tenant_id,
+                "source-a",
+                &revision,
+                serde_json::json!({
+                    "kind": "page_action",
+                    "page_id": "ts-counter",
+                    "action_id": "increment",
+                    "tenant_id": tenant_id,
+                    "user_id": "user-a"
+                })
+                .to_string(),
+            )
+        };
+        let content = |response: ComponentResponse| -> Result<String> {
+            let result = serde_json::from_str::<crate::runtime::PageActionResult>(&response.body)?;
+            let crate::runtime::PageBody::Actions { content, .. } = result.body else {
+                anyhow::bail!("页面动作没有返回 actions 页面体");
+            };
+            Ok(content)
+        };
+        assert_eq!(content(action("tenant-a")?)?, "计数：1");
+        assert_eq!(content(action("tenant-b")?)?, "计数：1");
+        assert_eq!(content(action("tenant-a")?)?, "计数：2");
+
         assert!(manager.deactivate("tenant-a", "source-a", &revision)?);
         assert_eq!(manager.active_instances()?, 1);
         assert!(

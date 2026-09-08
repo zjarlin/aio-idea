@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-#[cfg(any(feature = "web", feature = "desktop"))]
-pub use az_plugin_manifest::PageBody;
-pub use az_plugin_manifest::{PageDefinition, PluginRuntime};
+pub use az_plugin_manifest::{PageActionResult, PageBody, PageDefinition, PluginRuntime};
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PageActionRequest {
+    pub page_id: String,
+    pub action_id: String,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeCatalog {

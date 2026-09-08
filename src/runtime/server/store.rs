@@ -85,6 +85,12 @@ pub struct ServiceBinding {
     pub routes: Vec<String>,
 }
 
+pub struct PageServiceBinding {
+    pub source_id: String,
+    pub page: PageDefinition,
+    pub service: ServiceBinding,
+}
+
 pub struct ProcessTarget {
     pub tenant_id: String,
     pub source_id: String,
@@ -418,6 +424,43 @@ impl PluginStore {
             })
         })
         .transpose()
+    }
+
+    pub async fn active_page_service(
+        &self,
+        tenant_id: &str,
+        page_id: &str,
+    ) -> Result<Option<PageServiceBinding>> {
+        let rows = sqlx::query(
+            "SELECT sources.id AS source_id, revisions.revision, revisions.runtime, revisions.manifest, revisions.pages, instances.endpoint FROM tenant_plugin_bindings bindings JOIN plugin_sources sources ON sources.id = bindings.source_id JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id LEFT JOIN LATERAL (SELECT endpoint FROM plugin_runtime_instances WHERE tenant_id = bindings.tenant_id AND revision_id = revisions.id AND state = 'active' ORDER BY started_at DESC LIMIT 1) instances ON TRUE WHERE bindings.tenant_id = $1 AND bindings.enabled = TRUE AND revisions.runtime IN ('wasm-component', 'process') ORDER BY sources.id",
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut binding = None;
+        for row in rows {
+            let pages = serde_json::from_value::<Vec<PageDefinition>>(row.try_get("pages")?)?;
+            let Some(page) = pages.into_iter().find(|page| page.id == page_id) else {
+                continue;
+            };
+            ensure!(binding.is_none(), "活动插件页面 id 重复: {page_id}");
+            let manifest = serde_json::from_value::<PluginManifest>(row.try_get("manifest")?)?;
+            binding = Some(PageServiceBinding {
+                source_id: row.try_get("source_id")?,
+                page,
+                service: ServiceBinding {
+                    runtime: parse_runtime(row.try_get("runtime")?)?,
+                    revision: row.try_get("revision")?,
+                    endpoint: row.try_get("endpoint")?,
+                    routes: manifest
+                        .subplugins
+                        .iter()
+                        .flat_map(|plugin| plugin.routes.iter().cloned())
+                        .collect(),
+                },
+            });
+        }
+        Ok(binding)
     }
 
     pub async fn bound_runtime(&self, tenant_id: &str, source_id: &str) -> Result<BoundRuntime> {

@@ -17,7 +17,8 @@ use super::lifecycle::{
     restore_process_binding, stop_previous_process,
 };
 use crate::runtime::{
-    InstallPluginRequest, MarketplaceEntry, RuntimeCatalog, RuntimeResponse, UserView,
+    InstallPluginRequest, MarketplaceEntry, PageActionRequest, PageActionResult, PageBody,
+    PageDefinition, RuntimeCatalog, RuntimeResponse, UserView,
 };
 
 const MANAGE_PERMISSION: &str = "plugin:manage";
@@ -25,6 +26,7 @@ const MANAGE_PERMISSION: &str = "plugin:manage";
 pub fn router(state: RuntimeState) -> Router {
     Router::new()
         .route("/api/runtime/catalog", get(catalog))
+        .route("/api/runtime/pages/action", post(page_action))
         .route("/api/runtime/marketplace", get(marketplace))
         .route("/api/runtime/registries", post(add_registry))
         .route("/api/runtime/plugins/install", post(install))
@@ -49,6 +51,128 @@ async fn catalog(
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate(&state, &headers).await?;
     catalog_for(&state, &session).await
+}
+
+async fn page_action(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Json(request): Json<PageActionRequest>,
+) -> Result<Json<RuntimeResponse<PageActionResult>>, RuntimeError> {
+    let session = authenticate(&state, &headers).await?;
+    let binding = state
+        .store
+        .active_page_service(&session.tenant_id, &request.page_id)
+        .await?
+        .ok_or_else(|| RuntimeError::not_found("当前租户没有提供该页面的活动插件"))?;
+    ensure_page_action_allowed(&binding.page, &request.action_id, &session.permissions)?;
+    let event = serde_json::json!({
+        "kind": "page_action",
+        "page_id": request.page_id,
+        "action_id": request.action_id,
+        "tenant_id": session.tenant_id,
+        "user_id": session.user_id,
+    })
+    .to_string();
+    let result = match binding.service.runtime {
+        crate::runtime::PluginRuntime::WasmComponent => {
+            let manager = state.wasm.clone();
+            let tenant_id = session.tenant_id.clone();
+            let source_id = binding.source_id.clone();
+            let revision = binding.service.revision.clone();
+            let output = tokio::task::spawn_blocking(move || {
+                manager.handle(&tenant_id, &source_id, &revision, event)
+            })
+            .await
+            .map_err(|error| {
+                RuntimeError::bad_request(format!("等待 Wasm 页面动作失败: {error}"))
+            })??;
+            if !(200..300).contains(&output.status) {
+                return Err(RuntimeError::bad_request(format!(
+                    "Wasm 页面动作返回 HTTP {}",
+                    output.status
+                )));
+            }
+            serde_json::from_str::<PageActionResult>(&output.body)
+                .context("解析 Wasm 页面动作结果失败")?
+        }
+        crate::runtime::PluginRuntime::Process => {
+            let endpoint = binding
+                .service
+                .endpoint
+                .as_deref()
+                .context("process 页面插件缺少活动 endpoint")?;
+            let output = state
+                .process
+                .request(
+                    endpoint,
+                    "POST",
+                    "/aio/action",
+                    None,
+                    event.into_bytes(),
+                    Some("application/json"),
+                    &session.tenant_id,
+                    &session.user_id,
+                )
+                .await?;
+            if !output.status.is_success() {
+                return Err(RuntimeError::bad_request(format!(
+                    "process 页面动作返回 HTTP {}",
+                    output.status
+                )));
+            }
+            serde_json::from_slice::<PageActionResult>(&output.body)
+                .context("解析 process 页面动作结果失败")?
+        }
+        _ => return Err(RuntimeError::bad_request("当前页面运行时不支持动作")),
+    };
+    validate_page_action_result(&binding.page, &result)?;
+    Ok(Json(RuntimeResponse { data: result }))
+}
+
+fn ensure_page_action_allowed(
+    page: &PageDefinition,
+    action_id: &str,
+    permissions: &[String],
+) -> Result<(), RuntimeError> {
+    if !permitted(page.required_permission.as_deref(), permissions) {
+        return Err(RuntimeError::forbidden("当前角色没有页面动作权限"));
+    }
+    let PageBody::Actions { actions, .. } = &page.body else {
+        return Err(RuntimeError::bad_request("当前页面没有运行时动作"));
+    };
+    if !actions.iter().any(|action| action.id == action_id) {
+        return Err(RuntimeError::bad_request("页面动作未声明"));
+    }
+    Ok(())
+}
+
+fn validate_page_action_result(
+    page: &PageDefinition,
+    result: &PageActionResult,
+) -> Result<(), RuntimeError> {
+    let PageBody::Actions {
+        actions: declared, ..
+    } = &page.body
+    else {
+        return Err(RuntimeError::bad_request("当前页面没有运行时动作"));
+    };
+    let PageBody::Actions {
+        actions: returned, ..
+    } = &result.body
+    else {
+        return Err(RuntimeError::bad_request(
+            "页面动作结果必须保持 actions 页面体",
+        ));
+    };
+    if declared != returned {
+        return Err(RuntimeError::bad_request(
+            "页面动作结果不能修改已发布的动作声明",
+        ));
+    }
+    let mut updated = page.clone();
+    updated.body = result.body.clone();
+    az_plugin_manifest::validate_page_definitions(&[updated])?;
+    Ok(())
 }
 
 async fn install(
@@ -732,6 +856,28 @@ impl IntoResponse for RuntimeError {
 mod tests {
     use super::*;
     use crate::runtime::{InstalledPluginView, PluginRuntime, PluginState};
+    use az_plugin_manifest::{PageActionDefinition, SceneDefinition};
+
+    fn action_page(required_permission: Option<&str>) -> PageDefinition {
+        PageDefinition {
+            id: "counter".to_owned(),
+            label: "Counter".to_owned(),
+            icon: None,
+            scene: SceneDefinition {
+                id: "examples".to_owned(),
+                label: "Examples".to_owned(),
+            },
+            required_permission: required_permission.map(str::to_owned),
+            body: PageBody::Actions {
+                title: "Counter".to_owned(),
+                content: "0".to_owned(),
+                actions: vec![PageActionDefinition {
+                    id: "increment".to_owned(),
+                    label: "+1".to_owned(),
+                }],
+            },
+        }
+    }
 
     #[test]
     fn builds_manageable_entry_for_unlisted_plugin() {
@@ -766,5 +912,55 @@ mod tests {
         assert!(permitted(None, &permissions));
         assert!(permitted(Some("workspace:view"), &permissions));
         assert!(!permitted(Some("plugin:manage"), &permissions));
+    }
+
+    #[test]
+    fn allows_only_declared_page_actions_with_permission() {
+        let page = action_page(Some("counter:use"));
+        let permissions = vec!["counter:use".to_owned()];
+
+        assert!(ensure_page_action_allowed(&page, "increment", &permissions).is_ok());
+        assert!(ensure_page_action_allowed(&page, "missing", &permissions).is_err());
+        assert!(ensure_page_action_allowed(&page, "increment", &[]).is_err());
+    }
+
+    #[test]
+    fn action_result_cannot_change_published_actions() {
+        let page = action_page(None);
+        let valid = PageActionResult {
+            body: PageBody::Actions {
+                title: "Counter".to_owned(),
+                content: "1".to_owned(),
+                actions: vec![PageActionDefinition {
+                    id: "increment".to_owned(),
+                    label: "+1".to_owned(),
+                }],
+            },
+        };
+        assert!(validate_page_action_result(&page, &valid).is_ok());
+
+        let changed = PageActionResult {
+            body: PageBody::Actions {
+                title: "Counter".to_owned(),
+                content: "1".to_owned(),
+                actions: vec![PageActionDefinition {
+                    id: "reset".to_owned(),
+                    label: "Reset".to_owned(),
+                }],
+            },
+        };
+        assert!(validate_page_action_result(&page, &changed).is_err());
+        assert!(
+            validate_page_action_result(
+                &page,
+                &PageActionResult {
+                    body: PageBody::Text {
+                        title: "Counter".to_owned(),
+                        content: "1".to_owned(),
+                    },
+                },
+            )
+            .is_err()
+        );
     }
 }
