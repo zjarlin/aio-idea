@@ -35,6 +35,7 @@ fn builds_manageable_entry_for_unlisted_plugin() {
         revision: "0".repeat(40),
         runtime: PluginRuntime::PageDefinition,
         state: PluginState::Active,
+        capabilities: Default::default(),
     });
 
     assert_eq!(entry.title, "aio-plugin-kmp");
