@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use wasmtime::component::{Component, Instance, Linker};
-use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
+use wasmtime::{Collector, Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 
 #[cfg(test)]
 use crate::runtime::PluginRequest;
@@ -57,7 +57,12 @@ pub struct WasmManager {
 impl WasmManager {
     pub fn new() -> Result<Self> {
         let mut config = Config::new();
-        config.wasm_component_model(true).consume_fuel(true);
+        config
+            .wasm_component_model(true)
+            .wasm_function_references(true)
+            .wasm_gc(true)
+            .collector(Collector::DeferredReferenceCounting)
+            .consume_fuel(true);
         let engine = Engine::new(&config)
             .map_err(|error| anyhow!("创建 Wasm Component 引擎失败: {error:#}"))?;
         Ok(Self {

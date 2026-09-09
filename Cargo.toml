@@ -1,6 +1,6 @@
 [package]
 name = "aio-public-shell"
-version = "2026.9.8"
+version = "2026.9.9"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
@@ -24,7 +24,7 @@ tokio = { version = "1.47.1", features = ["fs", "macros", "net", "process", "rt-
 toml = { version = "0.9.5", optional = true }
 tower-http = { version = "0.6.2", features = ["fs"], optional = true }
 uuid = { version = "1.18.1", features = ["v4"], optional = true }
-wasmtime = { version = "48.0.0", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std"], optional = true }
+wasmtime = { version = "48.0.0", default-features = false, features = ["anyhow", "component-model", "cranelift", "gc-drc", "runtime", "std"], optional = true }
 web-sys = { version = "0.3.77", features = ["Location", "Window"], optional = true }
 aio_plugin_account = { package = "aio-plugin-account", git = "https://github.com/zjarlin/aio-plugin-account.git", rev = "4501496f224147d5e68123b3eb1b91798a0a9517", optional = true }
 aio_plugin_marketplace_client = { package = "aio-plugin-marketplace-client", git = "https://github.com/zjarlin/aio-plugin-marketplace.git", rev = "700ac6a38a32d2435215e2931f02123aa18afe6c", optional = true }
