@@ -1,5 +1,7 @@
 mod http_error;
+mod installation;
 mod lifecycle;
+mod marketplace_store;
 mod page_state;
 mod process;
 mod repository;
@@ -9,7 +11,12 @@ mod store;
 mod supervisor;
 mod wasm;
 
-use std::{env, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashSet,
+    env,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
@@ -24,6 +31,7 @@ pub struct RuntimeState {
     pub repository: Arc<repository::RepositoryInstaller>,
     pub identity: Arc<aio_plugin_identity_server::IdentityService>,
     pub marketplace_url: String,
+    marketplace_syncing: Arc<Mutex<HashSet<String>>>,
     pub process: Arc<process::ProcessManager>,
     pub wasm: Arc<wasm::WasmManager>,
 }
@@ -54,15 +62,51 @@ impl RuntimeState {
             identity,
             process,
             wasm,
+            marketplace_syncing: Arc::new(Mutex::new(HashSet::new())),
             marketplace_url: env::var("AIO_MARKETPLACE_URL").unwrap_or_else(|_| {
                 "https://raw.githubusercontent.com/zjarlin/aio/main/marketplace/index.json"
                     .to_owned()
             }),
         };
+        state.sync_marketplace_sources([state.marketplace_url.clone()]);
         state.ensure_default_plugins().await?;
         state.reconcile_wasm().await?;
         state.reconcile_processes().await?;
         Ok(state)
+    }
+
+    pub(super) fn sync_marketplace_sources(&self, sources: impl IntoIterator<Item = String>) {
+        for source in sources {
+            let should_start = self
+                .marketplace_syncing
+                .lock()
+                .map(|mut syncing| syncing.insert(source.clone()))
+                .unwrap_or(false);
+            if !should_start {
+                continue;
+            }
+            let repository = self.repository.clone();
+            let store = self.store.clone();
+            let syncing = self.marketplace_syncing.clone();
+            tokio::spawn(async move {
+                let result = match repository.registry(&source).await {
+                    Ok(entries) => store.replace_marketplace_entries(&source, &entries).await,
+                    Err(error) => {
+                        store
+                            .record_marketplace_sync_failure(&source, &format!("{error:#}"))
+                            .await
+                    }
+                };
+                if result.is_err() {
+                    let _ = store
+                        .record_marketplace_sync_failure(&source, "写入市场索引缓存失败")
+                        .await;
+                }
+                if let Ok(mut active) = syncing.lock() {
+                    active.remove(&source);
+                }
+            });
+        }
     }
 
     async fn ensure_default_plugins(&self) -> Result<()> {

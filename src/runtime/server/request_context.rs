@@ -1,5 +1,8 @@
 use aio_plugin_identity_server::SessionContext;
-use axum::{Json, http::HeaderMap};
+use axum::{
+    Json,
+    http::{HeaderMap, header},
+};
 
 use super::{RuntimeState, http_error::RuntimeError};
 use crate::runtime::{RuntimeCatalog, RuntimeResponse, UserView};
@@ -30,6 +33,39 @@ pub(super) async fn authenticate_manager(
         return Err(RuntimeError::forbidden("当前角色没有插件管理权限"));
     }
     Ok(session)
+}
+
+pub(super) async fn publisher_tenant(
+    state: &RuntimeState,
+    headers: &HeaderMap,
+    git: &str,
+    requested_tenant: Option<&str>,
+) -> Result<String, RuntimeError> {
+    if let Some(token) = bearer_token(headers)
+        && let Some(tenant_id) = state.store.publisher_tenant(git, token).await?
+    {
+        if let Some(requested_tenant) = requested_tenant
+            && requested_tenant != tenant_id
+        {
+            return Err(RuntimeError::forbidden("发布令牌不能切换目标租户"));
+        }
+        return Ok(tenant_id);
+    }
+    let session = authenticate_manager(state, headers).await?;
+    if let Some(requested_tenant) = requested_tenant
+        && requested_tenant != session.tenant_id
+    {
+        return Err(RuntimeError::forbidden("当前会话不能向其他租户发布插件"));
+    }
+    Ok(session.tenant_id)
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
 }
 
 pub(super) async fn catalog_for(

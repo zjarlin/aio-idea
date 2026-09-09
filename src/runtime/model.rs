@@ -83,6 +83,57 @@ pub struct InstallPluginRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg(feature = "server")]
+#[serde(deny_unknown_fields)]
+pub struct PublishPluginRequest {
+    pub git: String,
+    pub rev: String,
+    pub manifest_toml: String,
+    pub artifact_base64: String,
+    pub artifact_sha256: String,
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    #[serde(default)]
+    pub marketplace: Option<MarketplacePublication>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg(feature = "server")]
+#[serde(deny_unknown_fields)]
+pub struct CreatePublishCredentialRequest {
+    pub git: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg(feature = "server")]
+pub struct PublishCredentialView {
+    pub id: String,
+    pub tenant_id: String,
+    pub git: String,
+    pub token: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg(feature = "server")]
+#[serde(deny_unknown_fields)]
+pub struct MarketplacePublication {
+    pub title: String,
+    pub summary: String,
+    pub license: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg(feature = "server")]
+pub struct PublishedPluginView {
+    pub tenant_id: String,
+    pub source_id: String,
+    pub revision: String,
+    pub runtime: PluginRuntime,
+    pub page_count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg(feature = "server")]
 pub struct MarketplaceEntry {
     pub git: String,
     pub rev: String,

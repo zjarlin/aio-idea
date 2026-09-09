@@ -5,23 +5,28 @@ use axum::{
     extract::{OriginalUri, Path, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{any, get, post},
+    routing::{any, delete, get, post},
 };
 use serde::Deserialize;
 
-use super::lifecycle::{
-    cleanup_new_process, cleanup_new_wasm, deactivate_bound_wasm, deactivate_previous_wasm,
-    prepare_bound_wasm, prepare_process, prepare_process_revision, prepare_wasm,
-    restore_process_binding, stop_previous_process,
-};
 use super::{
     RuntimeState,
     http_error::RuntimeError,
-    request_context::{authenticate, authenticate_manager, catalog_for, catalog_value, permitted},
+    lifecycle::{
+        cleanup_new_process, cleanup_new_wasm, deactivate_bound_wasm, deactivate_previous_wasm,
+        prepare_bound_wasm, prepare_process_revision, restore_process_binding,
+        stop_previous_process,
+    },
+    marketplace_store::PUBLISHED_REGISTRY_SOURCE,
+    repository::validate_git,
+    request_context::{
+        authenticate, authenticate_manager, catalog_for, catalog_value, permitted, publisher_tenant,
+    },
 };
 use crate::runtime::{
-    InstallPluginRequest, MarketplaceEntry, PageActionRequest, PageActionResult, PageBody,
-    PageDefinition, PluginRequest, RuntimeCatalog, RuntimeResponse,
+    CreatePublishCredentialRequest, InstallPluginRequest, MarketplaceEntry, PageActionRequest,
+    PageActionResult, PageBody, PageDefinition, PluginRequest, PublishCredentialView,
+    PublishPluginRequest, PublishedPluginView, RuntimeCatalog, RuntimeResponse,
 };
 
 pub fn router(state: RuntimeState) -> Router {
@@ -31,6 +36,15 @@ pub fn router(state: RuntimeState) -> Router {
         .route("/api/runtime/marketplace", get(marketplace))
         .route("/api/runtime/registries", post(add_registry))
         .route("/api/runtime/plugins/install", post(install))
+        .route("/api/runtime/plugins/publish", post(publish))
+        .route(
+            "/api/runtime/publish-credentials",
+            post(create_publish_credential),
+        )
+        .route(
+            "/api/runtime/publish-credentials/{credential_id}",
+            delete(revoke_publish_credential),
+        )
         .route(
             "/api/runtime/plugins/{source_id}/events",
             get(lifecycle_events),
@@ -193,146 +207,71 @@ async fn install(
     Json(request): Json<InstallPluginRequest>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
-    let mut discovered = state
+    let discovered = state
         .repository
         .discover(&request.git, request.rev.as_deref())
         .await?;
-    if let Some(source_id) = state.store.source_id(&discovered.git).await? {
-        discovered.source_id = source_id;
-    }
-    let current_revision = discovered.revision.clone();
-    state
-        .store
-        .record_lifecycle_event(
-            &session.tenant_id,
-            &discovered.source_id,
-            None,
-            "validate",
-            "已校验 Git 完整提交、清单和预构建 artifact",
-        )
-        .await?;
-    let previous = state
-        .store
-        .active_process(&session.tenant_id, &discovered.source_id)
-        .await?;
-    let previous_target = if previous.is_some() {
-        Some(
-            state
-                .store
-                .bound_runtime(&session.tenant_id, &discovered.source_id)
-                .await?,
-        )
-    } else {
-        None
-    };
-    let previous_wasm = state
-        .store
-        .active_wasm_revision(&session.tenant_id, &discovered.source_id)
-        .await?;
-    let instance = if discovered.runtime == crate::runtime::PluginRuntime::Process {
-        Some(
-            match prepare_process(&state, &session.tenant_id, &mut discovered).await {
-                Ok(instance) => instance,
-                Err(error) => {
-                    let _ = state
-                        .store
-                        .record_lifecycle_event(
-                            &session.tenant_id,
-                            &discovered.source_id,
-                            None,
-                            "failed",
-                            &format!("process 健康检查失败: {error:#}"),
-                        )
-                        .await;
-                    return Err(error.into());
-                }
-            },
-        )
-    } else {
-        None
-    };
-    let wasm = if discovered.runtime == crate::runtime::PluginRuntime::WasmComponent {
-        Some(
-            match prepare_wasm(&state, &session.tenant_id, &mut discovered).await {
-                Ok(activation) => activation,
-                Err(error) => {
-                    let _ = state
-                        .store
-                        .record_lifecycle_event(
-                            &session.tenant_id,
-                            &discovered.source_id,
-                            None,
-                            "failed",
-                            &format!("Wasm Component 健康检查失败: {error:#}"),
-                        )
-                        .await;
-                    return Err(error.into());
-                }
-            },
-        )
-    } else {
-        None
-    };
-    if instance.is_some() || wasm.is_some() {
-        state
-            .store
-            .record_lifecycle_event(
-                &session.tenant_id,
-                &discovered.source_id,
-                None,
-                "health-check",
-                "运行时健康检查通过",
-            )
-            .await?;
-    }
-    let source_id = discovered.source_id.clone();
-    if let Err(error) = stop_previous_process(&state, previous, instance.as_ref()).await {
-        let _ = cleanup_new_process(&state, instance.as_ref()).await;
-        let _ = cleanup_new_wasm(
-            &state,
-            &session.tenant_id,
-            &source_id,
-            &current_revision,
-            wasm.as_ref(),
-        );
-        return Err(error.into());
-    }
-    if let Err(error) = state
-        .store
-        .activate(&session.tenant_id, discovered, instance.as_ref())
-        .await
-    {
-        let _ = cleanup_new_process(&state, instance.as_ref()).await;
-        let _ = cleanup_new_wasm(
-            &state,
-            &session.tenant_id,
-            &source_id,
-            &current_revision,
-            wasm.as_ref(),
-        );
-        if let Err(recovery) = restore_process_binding(
-            &state,
-            &session.tenant_id,
-            &source_id,
-            previous_target.as_ref(),
-        )
-        .await
-        {
-            return Err(anyhow::anyhow!(
-                "激活插件失败: {error:#}; 恢复旧 process 插件失败: {recovery:#}"
-            )
-            .into());
-        }
-        return Err(error.into());
-    }
-    deactivate_previous_wasm(
+    super::installation::activate(
         &state,
         &session.tenant_id,
-        &source_id,
-        previous_wasm.as_deref(),
-        wasm.as_ref().map(|_| current_revision.as_str()),
-    )?;
+        discovered,
+        "已校验 Git 完整提交、清单和预构建 artifact",
+    )
+    .await?;
     catalog_for(&state, &session).await
+}
+
+async fn publish(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Json(request): Json<PublishPluginRequest>,
+) -> Result<Json<RuntimeResponse<PublishedPluginView>>, RuntimeError> {
+    let tenant_id =
+        publisher_tenant(&state, &headers, &request.git, request.tenant_id.as_deref()).await?;
+    let publication = request
+        .marketplace
+        .as_ref()
+        .map(|metadata| {
+            let manifest = az_plugin_manifest::parse_manifest(&request.manifest_toml)?;
+            Ok::<_, anyhow::Error>(MarketplaceEntry {
+                git: request.git.clone(),
+                rev: request.rev.clone(),
+                title: metadata.title.clone(),
+                summary: metadata.summary.clone(),
+                license: metadata.license.clone(),
+                tags: metadata.tags.clone(),
+                installed: false,
+                source_id: None,
+                state: None,
+                active_revision: None,
+                runtime: manifest.plugin.runtime.map(|runtime| runtime.kind),
+                capabilities: manifest.plugin.capabilities,
+            })
+        })
+        .transpose()?;
+    let discovered = state.repository.publish(&request).await?;
+    let activated = super::installation::activate(
+        &state,
+        &tenant_id,
+        discovered,
+        "已校验 CI 发布的清单、artifact SHA-256 和运行时协议",
+    )
+    .await?;
+    if let Some(entry) = publication {
+        state
+            .store
+            .upsert_published_marketplace_entry(&entry)
+            .await?;
+    }
+    Ok(Json(RuntimeResponse {
+        data: PublishedPluginView {
+            tenant_id,
+            source_id: activated.source_id,
+            revision: activated.revision,
+            runtime: activated.runtime,
+            page_count: activated.page_count,
+        },
+    }))
 }
 
 async fn enable(
@@ -542,11 +481,14 @@ async fn marketplace(
 ) -> Result<Json<RuntimeResponse<Vec<MarketplaceEntry>>>, RuntimeError> {
     let session = authenticate(&state, &headers).await?;
     let catalog = catalog_value(&state, &session).await?;
-    let mut sources = vec![state.marketplace_url.clone()];
-    sources.extend(state.store.registry_sources(&session.tenant_id).await?);
+    let mut remote_sources = vec![state.marketplace_url.clone()];
+    remote_sources.extend(state.store.registry_sources(&session.tenant_id).await?);
+    state.sync_marketplace_sources(remote_sources.clone());
+    let mut sources = vec![PUBLISHED_REGISTRY_SOURCE.to_owned()];
+    sources.extend(remote_sources);
     let mut entries = Vec::new();
     for source in sources {
-        for mut entry in state.repository.registry(&source).await? {
+        for mut entry in state.store.marketplace_entries(&source).await? {
             if let Some(plugin) = catalog
                 .plugins
                 .iter()
@@ -735,6 +677,33 @@ async fn add_registry(
         return Err(RuntimeError::bad_request("市场来源必须使用 HTTPS"));
     }
     state.store.add_registry(&session.tenant_id, source).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn create_publish_credential(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Json(request): Json<CreatePublishCredentialRequest>,
+) -> Result<Json<RuntimeResponse<PublishCredentialView>>, RuntimeError> {
+    let session = authenticate_manager(&state, &headers).await?;
+    validate_git(&request.git)?;
+    let credential = state
+        .store
+        .create_publish_credential(&session.tenant_id, &request.git)
+        .await?;
+    Ok(Json(RuntimeResponse { data: credential }))
+}
+
+async fn revoke_publish_credential(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path(credential_id): Path<String>,
+) -> Result<StatusCode, RuntimeError> {
+    let session = authenticate_manager(&state, &headers).await?;
+    state
+        .store
+        .revoke_publish_credential(&session.tenant_id, &credential_id)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -8,17 +8,22 @@ use std::{
 
 use anyhow::{Context as _, Result, ensure};
 use az_plugin_manifest::{
-    artifact_path, read_manifest, validate_declared_pages, validate_host_compatibility,
-    validate_page_definitions, validate_repository,
+    artifact_path, parse_manifest, read_manifest, validate_declared_pages,
+    validate_host_compatibility, validate_page_definitions, validate_repository,
 };
+use base64::Engine as _;
 use flate2::read::GzDecoder;
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 use tar::Archive;
 use tokio::process::Command;
 
-use crate::runtime::{MarketplaceEntry, PageDefinition, PluginRuntime};
+use crate::runtime::{MarketplaceEntry, PageDefinition, PluginRuntime, PublishPluginRequest};
 
 const MAX_ARCHIVE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_PUBLISHED_ARTIFACT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_PUBLISHED_MANIFEST_BYTES: usize = 128 * 1024;
+const REGISTRY_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub struct DiscoveredPlugin {
     pub source_id: String,
@@ -132,10 +137,129 @@ impl RepositoryInstaller {
         finish_with_cleanup(result, &staging).await
     }
 
+    pub async fn publish(&self, request: &PublishPluginRequest) -> Result<DiscoveredPlugin> {
+        validate_git(&request.git)?;
+        ensure!(
+            is_full_revision(&request.rev),
+            "发布插件必须使用完整提交 SHA"
+        );
+        ensure!(
+            request.manifest_toml.len() <= MAX_PUBLISHED_MANIFEST_BYTES,
+            "发布插件清单不能超过 {MAX_PUBLISHED_MANIFEST_BYTES} 字节"
+        );
+        ensure!(
+            request.artifact_sha256.len() == 64
+                && request
+                    .artifact_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+            "artifact_sha256 必须是完整 SHA-256"
+        );
+        let artifact_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&request.artifact_base64)
+            .context("发布 artifact 不是有效 Base64")?;
+        ensure!(
+            artifact_bytes.len() <= MAX_PUBLISHED_ARTIFACT_BYTES,
+            "发布 artifact 不能超过 {MAX_PUBLISHED_ARTIFACT_BYTES} 字节"
+        );
+        let actual_digest = format!("{:x}", Sha256::digest(&artifact_bytes));
+        ensure!(
+            actual_digest.eq_ignore_ascii_case(&request.artifact_sha256),
+            "发布 artifact SHA-256 不匹配"
+        );
+        let manifest = parse_manifest(&request.manifest_toml)?;
+        validate_host_compatibility(&manifest, env!("CARGO_PKG_VERSION"))?;
+        let runtime = manifest
+            .plugin
+            .runtime
+            .as_ref()
+            .context("发布插件缺少 plugin.runtime")?;
+        ensure!(
+            matches!(
+                runtime.kind,
+                PluginRuntime::PageDefinition | PluginRuntime::WasmComponent
+            ),
+            "发布接口当前只接受 page-definition 或 wasm-component artifact"
+        );
+        if runtime.kind == PluginRuntime::WasmComponent {
+            ensure!(
+                manifest.plugin.capabilities.network.is_empty()
+                    && manifest.plugin.capabilities.filesystem.is_empty()
+                    && !manifest.plugin.capabilities.database,
+                "当前 Wasm Component 宿主未授予网络、文件系统或数据库能力"
+            );
+        }
+        tokio::fs::create_dir_all(&self.cache_root)
+            .await
+            .context("创建插件缓存目录失败")?;
+        let staging = self
+            .cache_root
+            .join(format!("staging-publish-{}", uuid::Uuid::new_v4()));
+        let result = async {
+            tokio::fs::create_dir_all(&staging).await?;
+            tokio::fs::write(staging.join("aio-plugin.toml"), &request.manifest_toml).await?;
+            let artifact_target = staging.join(&runtime.artifact);
+            let parent = artifact_target
+                .parent()
+                .context("发布 artifact 缺少父目录")?;
+            tokio::fs::create_dir_all(parent).await?;
+            tokio::fs::write(&artifact_target, &artifact_bytes).await?;
+            let validation_root = staging.clone();
+            let report = tokio::task::spawn_blocking(move || validate_repository(&validation_root))
+                .await
+                .context("等待发布 artifact 校验失败")??;
+            let final_directory = self.cache_root.join(&request.rev);
+            if final_directory.exists() {
+                let existing_manifest = read_manifest(&final_directory)?;
+                ensure!(
+                    existing_manifest == manifest,
+                    "同一提交 SHA 已存在不同的发布清单"
+                );
+                let existing_artifact = artifact_path(&final_directory, &runtime.artifact)?;
+                let existing_digest =
+                    format!("{:x}", Sha256::digest(std::fs::read(existing_artifact)?));
+                ensure!(
+                    existing_digest.eq_ignore_ascii_case(&request.artifact_sha256),
+                    "同一提交 SHA 已存在不同的发布 artifact"
+                );
+            } else {
+                tokio::fs::rename(&staging, &final_directory)
+                    .await
+                    .context("原子发布 artifact 缓存失败")?;
+            }
+            let pages = if runtime.kind == PluginRuntime::PageDefinition {
+                serde_json::from_slice::<Vec<PageDefinition>>(
+                    &tokio::fs::read(artifact_path(&final_directory, &runtime.artifact)?).await?,
+                )
+                .context("解析已发布 PageDefinition 失败")?
+            } else {
+                Vec::new()
+            };
+            Ok(DiscoveredPlugin {
+                source_id: uuid::Uuid::new_v4().to_string(),
+                git: request.git.clone(),
+                revision: request.rev.clone(),
+                runtime: report.runtime,
+                manifest: serde_json::to_value(&manifest.plugin)?,
+                pages,
+                artifact: runtime.artifact.clone(),
+            })
+        }
+        .await;
+        finish_with_cleanup(result, &staging).await
+    }
+
     pub async fn registry(&self, source: &str) -> Result<Vec<MarketplaceEntry>> {
         if !source.ends_with(".git") {
             ensure!(source.starts_with("https://"), "市场索引必须使用 HTTPS");
-            return reqwest::get(source)
+            let client = reqwest::Client::builder()
+                .connect_timeout(REGISTRY_TIMEOUT)
+                .timeout(REGISTRY_TIMEOUT)
+                .build()
+                .context("创建市场索引 HTTP 客户端失败")?;
+            return client
+                .get(source)
+                .send()
                 .await
                 .context("请求市场索引失败")?
                 .error_for_status()
@@ -300,7 +424,7 @@ async fn download_archive(source: reqwest::Url, staging: &Path) -> Result<PathBu
     Ok(root.path())
 }
 
-fn validate_git(git: &str) -> Result<()> {
+pub(super) fn validate_git(git: &str) -> Result<()> {
     ensure!(
         git.starts_with("https://") && git.ends_with(".git"),
         "插件来源必须是 HTTPS Git 仓库"
@@ -388,6 +512,71 @@ mod tests {
             .is_none()
         );
         assert!(github_archive("https://github.com/example/plugin.git", Some("main"))?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn publishes_validated_page_definition_artifact() -> Result<()> {
+        let artifact = br#"[{"id":"published-page","label":"Published","icon":"box","scene":{"id":"community","label":"Community"},"required_permission":null,"body":{"kind":"text","title":"Published","content":"from CI"}}]"#;
+        let request = PublishPluginRequest {
+            git: "https://github.com/example/aio-plugin-published.git".to_owned(),
+            rev: "a".repeat(40),
+            manifest_toml: r#"
+[plugin.runtime]
+kind = "page-definition"
+artifact = "dist/pages.json"
+
+[plugin.capabilities]
+network = []
+filesystem = []
+database = false
+
+[[plugin.subplugins]]
+id = "published"
+pages = ["published-page"]
+"#
+            .to_owned(),
+            artifact_base64: base64::engine::general_purpose::STANDARD.encode(artifact),
+            artifact_sha256: format!("{:x}", Sha256::digest(artifact)),
+            tenant_id: None,
+            marketplace: None,
+        };
+        let temporary = tempfile::tempdir()?;
+        let installer = RepositoryInstaller::new(temporary.path().join("cache"));
+
+        let published = installer.publish(&request).await?;
+
+        assert_eq!(published.runtime, PluginRuntime::PageDefinition);
+        assert_eq!(published.pages.len(), 1);
+        assert!(
+            installer
+                .artifact(&request.rev, "dist/pages.json")?
+                .is_file()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rejects_published_artifact_with_mismatched_digest() -> Result<()> {
+        let request = PublishPluginRequest {
+            git: "https://github.com/example/aio-plugin-published.git".to_owned(),
+            rev: "b".repeat(40),
+            manifest_toml: "[plugin.runtime]\nkind = 'page-definition'\nartifact = 'pages.json'"
+                .to_owned(),
+            artifact_base64: base64::engine::general_purpose::STANDARD.encode(b"[]"),
+            artifact_sha256: "0".repeat(64),
+            tenant_id: None,
+            marketplace: None,
+        };
+        let temporary = tempfile::tempdir()?;
+        let installer = RepositoryInstaller::new(temporary.path().join("cache"));
+
+        let error = match installer.publish(&request).await {
+            Ok(_) => panic!("摘要错误的 artifact 不能发布"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("SHA-256 不匹配"));
         Ok(())
     }
 }

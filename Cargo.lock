@@ -206,6 +206,7 @@ dependencies = [
  "az-dioxus-admin-shell",
  "az-plugin-manifest",
  "az-ui-components",
+ "base64",
  "dill",
  "dioxus",
  "flate2",
