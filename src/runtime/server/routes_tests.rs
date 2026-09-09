@@ -1,4 +1,4 @@
-use az_plugin_manifest::{PageActionDefinition, SceneDefinition};
+use az_plugin_manifest::{CapabilityManifest, PageActionDefinition, SceneDefinition};
 
 use super::*;
 use crate::runtime::{InstalledPluginView, PluginRuntime, PluginState};
@@ -42,6 +42,48 @@ fn builds_manageable_entry_for_unlisted_plugin() {
     assert!(entry.installed);
     assert_eq!(entry.source_id.as_deref(), Some("source"));
     assert_eq!(entry.tags, vec!["unlisted"]);
+}
+
+#[test]
+fn preserves_market_metadata_until_an_installed_manifest_overrides_it() {
+    let mut entry = MarketplaceEntry {
+        git: "https://github.com/example/plugin.git".to_owned(),
+        rev: "1".repeat(40),
+        title: "Plugin".to_owned(),
+        summary: "Summary".to_owned(),
+        license: "MIT".to_owned(),
+        tags: vec!["example".to_owned()],
+        installed: false,
+        source_id: None,
+        state: None,
+        active_revision: None,
+        runtime: Some(PluginRuntime::Process),
+        capabilities: CapabilityManifest {
+            network: vec!["api.example.com".to_owned()],
+            filesystem: Vec::new(),
+            database: false,
+        },
+    };
+
+    assert_eq!(entry.runtime, Some(PluginRuntime::Process));
+    assert_eq!(entry.capabilities.network, ["api.example.com"]);
+
+    let git = entry.git.clone();
+    enrich_marketplace_entry(
+        &mut entry,
+        &InstalledPluginView {
+            source_id: "source".to_owned(),
+            git,
+            revision: "2".repeat(40),
+            runtime: PluginRuntime::WasmComponent,
+            state: PluginState::Active,
+            capabilities: Default::default(),
+        },
+    );
+
+    assert!(entry.installed);
+    assert_eq!(entry.runtime, Some(PluginRuntime::WasmComponent));
+    assert!(entry.capabilities.network.is_empty());
 }
 
 #[test]

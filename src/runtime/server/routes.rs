@@ -547,33 +547,13 @@ async fn marketplace(
     let mut entries = Vec::new();
     for source in sources {
         for mut entry in state.repository.registry(&source).await? {
-            entry.source_id = catalog
+            if let Some(plugin) = catalog
                 .plugins
                 .iter()
                 .find(|plugin| plugin.git == entry.git)
-                .map(|plugin| plugin.source_id.clone());
-            entry.installed = entry.source_id.is_some();
-            entry.state = catalog
-                .plugins
-                .iter()
-                .find(|plugin| plugin.git == entry.git)
-                .map(|plugin| plugin.state);
-            entry.active_revision = catalog
-                .plugins
-                .iter()
-                .find(|plugin| plugin.git == entry.git)
-                .map(|plugin| plugin.revision.clone());
-            entry.runtime = catalog
-                .plugins
-                .iter()
-                .find(|plugin| plugin.git == entry.git)
-                .map(|plugin| plugin.runtime);
-            entry.capabilities = catalog
-                .plugins
-                .iter()
-                .find(|plugin| plugin.git == entry.git)
-                .map(|plugin| plugin.capabilities.clone())
-                .unwrap_or_default();
+            {
+                enrich_marketplace_entry(&mut entry, plugin);
+            }
             if !entries
                 .iter()
                 .any(|current: &MarketplaceEntry| current.git == entry.git)
@@ -591,6 +571,18 @@ async fn marketplace(
         }
     }
     Ok(Json(RuntimeResponse { data: entries }))
+}
+
+fn enrich_marketplace_entry(
+    entry: &mut MarketplaceEntry,
+    plugin: &crate::runtime::InstalledPluginView,
+) {
+    entry.source_id = Some(plugin.source_id.clone());
+    entry.installed = true;
+    entry.state = Some(plugin.state);
+    entry.active_revision = Some(plugin.revision.clone());
+    entry.runtime = Some(plugin.runtime);
+    entry.capabilities.clone_from(&plugin.capabilities);
 }
 
 async fn lifecycle_events(
