@@ -231,27 +231,26 @@ async fn publish(
 ) -> Result<Json<RuntimeResponse<PublishedPluginView>>, RuntimeError> {
     let tenant_id =
         publisher_tenant(&state, &headers, &request.git, request.tenant_id.as_deref()).await?;
-    let publication = request
+    let manifest = az_plugin_manifest::parse_manifest(&request.manifest_toml)?;
+    let metadata = manifest
+        .plugin
         .marketplace
         .as_ref()
-        .map(|metadata| {
-            let manifest = az_plugin_manifest::parse_manifest(&request.manifest_toml)?;
-            Ok::<_, anyhow::Error>(MarketplaceEntry {
-                git: request.git.clone(),
-                rev: request.rev.clone(),
-                title: metadata.title.clone(),
-                summary: metadata.summary.clone(),
-                license: metadata.license.clone(),
-                tags: metadata.tags.clone(),
-                installed: false,
-                source_id: None,
-                state: None,
-                active_revision: None,
-                runtime: manifest.plugin.runtime.map(|runtime| runtime.kind),
-                capabilities: manifest.plugin.capabilities,
-            })
-        })
-        .transpose()?;
+        .context("在线发布插件必须声明 [plugin.marketplace]")?;
+    let publication = MarketplaceEntry {
+        git: request.git.clone(),
+        rev: request.rev.clone(),
+        title: metadata.title.clone(),
+        summary: metadata.summary.clone(),
+        license: metadata.license.clone(),
+        tags: metadata.tags.clone(),
+        installed: false,
+        source_id: None,
+        state: None,
+        active_revision: None,
+        runtime: manifest.plugin.runtime.map(|runtime| runtime.kind),
+        capabilities: manifest.plugin.capabilities,
+    };
     let discovered = state.repository.publish(&request).await?;
     let activated = super::installation::activate(
         &state,
@@ -260,12 +259,10 @@ async fn publish(
         "已校验 CI 发布的清单、artifact SHA-256 和运行时协议",
     )
     .await?;
-    if let Some(entry) = publication {
-        state
-            .store
-            .upsert_published_marketplace_entry(&entry)
-            .await?;
-    }
+    state
+        .store
+        .upsert_published_marketplace_entry(&publication)
+        .await?;
     Ok(Json(RuntimeResponse {
         data: PublishedPluginView {
             tenant_id,

@@ -539,7 +539,6 @@ pages = ["published-page"]
             artifact_base64: base64::engine::general_purpose::STANDARD.encode(artifact),
             artifact_sha256: format!("{:x}", Sha256::digest(artifact)),
             tenant_id: None,
-            marketplace: None,
         };
         let temporary = tempfile::tempdir()?;
         let installer = RepositoryInstaller::new(temporary.path().join("cache"));
@@ -566,7 +565,6 @@ pages = ["published-page"]
             artifact_base64: base64::engine::general_purpose::STANDARD.encode(b"[]"),
             artifact_sha256: "0".repeat(64),
             tenant_id: None,
-            marketplace: None,
         };
         let temporary = tempfile::tempdir()?;
         let installer = RepositoryInstaller::new(temporary.path().join("cache"));

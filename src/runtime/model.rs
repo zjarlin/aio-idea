@@ -92,8 +92,6 @@ pub struct PublishPluginRequest {
     pub artifact_sha256: String,
     #[serde(default)]
     pub tenant_id: Option<String>,
-    #[serde(default)]
-    pub marketplace: Option<MarketplacePublication>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -110,16 +108,6 @@ pub struct PublishCredentialView {
     pub tenant_id: String,
     pub git: String,
     pub token: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[cfg(feature = "server")]
-#[serde(deny_unknown_fields)]
-pub struct MarketplacePublication {
-    pub title: String,
-    pub summary: String,
-    pub license: String,
-    pub tags: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

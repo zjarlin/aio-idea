@@ -524,7 +524,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-manifest"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio.git?rev=f7bab6fb66bc78316a75f92b5a84deaa35034e44#f7bab6fb66bc78316a75f92b5a84deaa35034e44"
+source = "git+https://github.com/zjarlin/aio.git?rev=f7724871f597751420c76ca46970692b170301a6#f7724871f597751420c76ca46970692b170301a6"
 dependencies = [
  "anyhow",
  "semver",
