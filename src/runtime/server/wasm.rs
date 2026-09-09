@@ -266,6 +266,30 @@ mod tests {
         let first = manager.activate("tenant-a", "source-a", &revision, Path::new(&artifact))?;
         assert!(first.created);
         assert!(!first.pages.is_empty());
+        let action_page = first
+            .pages
+            .iter()
+            .find_map(|page| match &page.body {
+                crate::runtime::PageBody::Actions {
+                    title,
+                    content,
+                    actions,
+                    ..
+                } => Some((
+                    page.id.clone(),
+                    title.clone(),
+                    content.clone(),
+                    actions.clone(),
+                )),
+                _ => None,
+            })
+            .context("测试 Component 没有 actions 页面")?;
+        let action_id = action_page
+            .3
+            .first()
+            .context("测试 Component 没有页面动作")?
+            .id
+            .clone();
 
         let reused = manager.activate("tenant-a", "source-a", &revision, Path::new(&artifact))?;
         assert!(!reused.created);
@@ -294,34 +318,34 @@ mod tests {
                 "source-a",
                 &revision,
                 serde_json::to_string(&PluginRequest::PageAction {
-                    page_id: "ts-counter".to_owned(),
-                    action_id: "increment".to_owned(),
+                    page_id: action_page.0.clone(),
+                    action_id: action_id.clone(),
                     tenant_id: tenant_id.to_owned(),
                     user_id: "user-a".to_owned(),
                     body: crate::runtime::PageBody::Actions {
-                        title: "TypeScript Component".to_owned(),
-                        content: format!("计数：{count}"),
+                        title: action_page.1.clone(),
+                        content: action_page.2.clone(),
                         state: [("count".to_owned(), serde_json::json!(count))]
                             .into_iter()
                             .collect(),
-                        actions: vec![az_plugin_manifest::PageActionDefinition {
-                            id: "increment".to_owned(),
-                            label: "TypeScript +1".to_owned(),
-                        }],
+                        actions: action_page.3.clone(),
                     },
                 })?,
             )
         };
-        let content = |response: ComponentResponse| -> Result<String> {
+        let count = |response: ComponentResponse| -> Result<u64> {
             let result = serde_json::from_str::<crate::runtime::PageActionResult>(&response.body)?;
-            let crate::runtime::PageBody::Actions { content, .. } = result.body else {
+            let crate::runtime::PageBody::Actions { state, .. } = result.body else {
                 anyhow::bail!("页面动作没有返回 actions 页面体");
             };
-            Ok(content)
+            state
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .context("页面动作没有返回整数 count 状态")
         };
-        assert_eq!(content(action("tenant-a", 0)?)?, "计数：1");
-        assert_eq!(content(action("tenant-b", 0)?)?, "计数：1");
-        assert_eq!(content(action("tenant-a", 1)?)?, "计数：2");
+        assert_eq!(count(action("tenant-a", 0)?)?, 1);
+        assert_eq!(count(action("tenant-b", 0)?)?, 1);
+        assert_eq!(count(action("tenant-a", 1)?)?, 2);
 
         assert!(manager.deactivate("tenant-a", "source-a", &revision)?);
         assert_eq!(manager.active_instances()?, 1);
