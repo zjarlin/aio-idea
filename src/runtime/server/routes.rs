@@ -7,7 +7,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, delete, get, post},
 };
+use flate2::read::GzDecoder;
 use serde::Deserialize;
+use std::io::Read;
 
 use super::{
     RuntimeState,
@@ -228,8 +230,24 @@ async fn install(
 async fn publish(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
-    Json(request): Json<PublishPluginRequest>,
+    body: Bytes,
 ) -> Result<Json<RuntimeResponse<PublishedPluginView>>, RuntimeError> {
+    let body = if headers
+        .get(header::CONTENT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("gzip"))
+    {
+        let mut decoder = GzDecoder::new(body.as_ref());
+        let mut decoded = Vec::new();
+        decoder.read_to_end(&mut decoded).map_err(|error| {
+            RuntimeError::bad_request(format!("发布请求 gzip 解压失败: {error}"))
+        })?;
+        decoded
+    } else {
+        body.to_vec()
+    };
+    let request: PublishPluginRequest = serde_json::from_slice(&body)
+        .map_err(|error| RuntimeError::bad_request(format!("发布请求 JSON 无效: {error}")))?;
     let tenant_id =
         publisher_tenant(&state, &headers, &request.git, request.tenant_id.as_deref()).await?;
     let manifest = az_plugin_manifest::parse_manifest(&request.manifest_toml)?;
