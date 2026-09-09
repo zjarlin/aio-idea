@@ -1,9 +1,9 @@
 use anyhow::{Context as _, Result, ensure};
 use sha2::{Digest as _, Sha256};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 
 use super::store::PluginStore;
-use crate::runtime::PublishCredentialView;
+use crate::runtime::{PluginRuntime, PublishCredentialView, PublishState};
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS plugin_publish_credentials (
@@ -15,7 +15,34 @@ CREATE TABLE IF NOT EXISTS plugin_publish_credentials (
     revoked_at TIMESTAMPTZ,
     UNIQUE(tenant_id, git)
 );
+CREATE TABLE IF NOT EXISTS plugin_publish_jobs (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    git TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    runtime TEXT NOT NULL,
+    page_count INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(tenant_id, git, revision)
+);
+CREATE INDEX IF NOT EXISTS plugin_publish_jobs_pending_idx ON plugin_publish_jobs(state, updated_at);
 "#;
+
+#[derive(Clone)]
+pub(super) struct PublishJob {
+    pub id: String,
+    pub tenant_id: String,
+    pub source_id: String,
+    pub git: String,
+    pub revision: String,
+    pub runtime: PluginRuntime,
+    pub page_count: usize,
+    pub state: PublishState,
+}
 
 pub(super) async fn migrate(pool: &PgPool) -> Result<()> {
     sqlx::raw_sql(SCHEMA)
@@ -26,7 +53,7 @@ pub(super) async fn migrate(pool: &PgPool) -> Result<()> {
 }
 
 impl PluginStore {
-    pub async fn create_publish_credential(
+    pub(super) async fn create_publish_credential(
         &self,
         tenant_id: &str,
         git: &str,
@@ -55,7 +82,7 @@ impl PluginStore {
         })
     }
 
-    pub async fn publisher_tenant(&self, git: &str, token: &str) -> Result<Option<String>> {
+    pub(super) async fn publisher_tenant(&self, git: &str, token: &str) -> Result<Option<String>> {
         sqlx::query_scalar(
             "SELECT tenant_id FROM plugin_publish_credentials WHERE git = $1 AND token_hash = $2 AND revoked_at IS NULL",
         )
@@ -66,7 +93,7 @@ impl PluginStore {
         .map_err(Into::into)
     }
 
-    pub async fn revoke_publish_credential(
+    pub(super) async fn revoke_publish_credential(
         &self,
         tenant_id: &str,
         credential_id: &str,
@@ -80,6 +107,126 @@ impl PluginStore {
         .await?;
         ensure!(result.rows_affected() == 1, "发布凭证不存在或已撤销");
         Ok(())
+    }
+
+    pub(super) async fn queue_publish_job(
+        &self,
+        tenant_id: &str,
+        source_id: &str,
+        git: &str,
+        revision: &str,
+        runtime: PluginRuntime,
+        page_count: usize,
+    ) -> Result<PublishJob> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let row = sqlx::query(
+            "INSERT INTO plugin_publish_jobs (id, tenant_id, source_id, git, revision, runtime, page_count, state, detail) VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', '已持久化 artifact，等待后台验证') ON CONFLICT (tenant_id, git, revision) DO UPDATE SET state = CASE WHEN plugin_publish_jobs.state = 'active' THEN 'active' ELSE 'queued' END, detail = CASE WHEN plugin_publish_jobs.state = 'active' THEN plugin_publish_jobs.detail ELSE '已持久化 artifact，等待后台验证' END, updated_at = now() RETURNING id, tenant_id, source_id, git, revision, runtime, page_count, state",
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .bind(source_id)
+        .bind(git)
+        .bind(revision)
+        .bind(super::store::runtime_name(runtime))
+        .bind(i32::try_from(page_count).context("发布页面数量超过数据库范围")?)
+        .fetch_one(&self.pool)
+        .await?;
+        publish_job(row)
+    }
+
+    pub(super) async fn claim_publish_job(&self, job_id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE plugin_publish_jobs SET state = 'running', detail = '正在验证 Component 并执行健康检查', updated_at = now() WHERE id = $1 AND state = 'queued'",
+        )
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub(super) async fn finish_publish_job(
+        &self,
+        job_id: &str,
+        state: PublishState,
+        detail: &str,
+    ) -> Result<()> {
+        ensure!(
+            matches!(state, PublishState::Active | PublishState::Failed),
+            "发布任务只能完成为 active 或 failed"
+        );
+        sqlx::query(
+            "UPDATE plugin_publish_jobs SET state = $2, detail = $3, updated_at = now() WHERE id = $1",
+        )
+        .bind(job_id)
+        .bind(publish_state_name(state))
+        .bind(detail)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub(super) async fn resume_publish_jobs(&self) -> Result<Vec<PublishJob>> {
+        sqlx::query(
+            "UPDATE plugin_publish_jobs SET state = 'queued', detail = '宿主重启后恢复后台验证', updated_at = now() WHERE state = 'running'",
+        )
+        .execute(&self.pool)
+        .await?;
+        let rows = sqlx::query(
+            "SELECT id, tenant_id, source_id, git, revision, runtime, page_count, state FROM plugin_publish_jobs WHERE state = 'queued' ORDER BY created_at",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(publish_job).collect()
+    }
+
+    pub(super) async fn publish_job(
+        &self,
+        tenant_id: &str,
+        job_id: &str,
+    ) -> Result<Option<PublishJob>> {
+        sqlx::query(
+            "SELECT id, tenant_id, source_id, git, revision, runtime, page_count, state FROM plugin_publish_jobs WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id)
+        .bind(job_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(publish_job)
+        .transpose()
+    }
+}
+
+fn publish_job(row: sqlx::postgres::PgRow) -> Result<PublishJob> {
+    let page_count = row.try_get::<i32, _>("page_count")?;
+    ensure!(page_count >= 0, "发布任务页面数量不能为负数");
+    Ok(PublishJob {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        source_id: row.try_get("source_id")?,
+        git: row.try_get("git")?,
+        revision: row.try_get("revision")?,
+        runtime: super::store::parse_runtime(row.try_get("runtime")?)?,
+        page_count: usize::try_from(page_count).context("发布任务页面数量无效")?,
+        state: parse_publish_state(row.try_get("state")?)?,
+    })
+}
+
+fn publish_state_name(state: PublishState) -> &'static str {
+    match state {
+        PublishState::Queued => "queued",
+        PublishState::Running => "running",
+        PublishState::Active => "active",
+        PublishState::Failed => "failed",
+    }
+}
+
+fn parse_publish_state(value: String) -> Result<PublishState> {
+    match value.as_str() {
+        "queued" => Ok(PublishState::Queued),
+        "running" => Ok(PublishState::Running),
+        "active" => Ok(PublishState::Active),
+        "failed" => Ok(PublishState::Failed),
+        _ => anyhow::bail!("未知发布任务状态: {value}"),
     }
 }
 

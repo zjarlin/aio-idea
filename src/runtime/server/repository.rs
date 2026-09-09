@@ -137,7 +137,13 @@ impl RepositoryInstaller {
         finish_with_cleanup(result, &staging).await
     }
 
+    #[cfg(test)]
     pub async fn publish(&self, request: &PublishPluginRequest) -> Result<DiscoveredPlugin> {
+        let staged = self.stage_publish(request).await?;
+        self.validate_published(&staged.git, &staged.revision).await
+    }
+
+    pub async fn stage_publish(&self, request: &PublishPluginRequest) -> Result<DiscoveredPlugin> {
         validate_git(&request.git)?;
         ensure!(
             is_full_revision(&request.rev),
@@ -204,10 +210,6 @@ impl RepositoryInstaller {
                 .context("发布 artifact 缺少父目录")?;
             tokio::fs::create_dir_all(parent).await?;
             tokio::fs::write(&artifact_target, &artifact_bytes).await?;
-            let validation_root = staging.clone();
-            let report = tokio::task::spawn_blocking(move || validate_repository(&validation_root))
-                .await
-                .context("等待发布 artifact 校验失败")??;
             let final_directory = self.cache_root.join(&request.rev);
             if final_directory.exists() {
                 let existing_manifest = read_manifest(&final_directory)?;
@@ -235,11 +237,15 @@ impl RepositoryInstaller {
             } else {
                 Vec::new()
             };
+            if runtime.kind == PluginRuntime::PageDefinition {
+                validate_page_definitions(&pages)?;
+                validate_declared_pages(&manifest, &pages)?;
+            }
             Ok(DiscoveredPlugin {
-                source_id: uuid::Uuid::new_v4().to_string(),
+                source_id: published_source_id(&request.git),
                 git: request.git.clone(),
                 revision: request.rev.clone(),
-                runtime: report.runtime,
+                runtime: runtime.kind,
                 manifest: serde_json::to_value(&manifest.plugin)?,
                 pages,
                 artifact: runtime.artifact.clone(),
@@ -247,6 +253,55 @@ impl RepositoryInstaller {
         }
         .await;
         finish_with_cleanup(result, &staging).await
+    }
+
+    pub async fn validate_published(&self, git: &str, revision: &str) -> Result<DiscoveredPlugin> {
+        validate_git(git)?;
+        ensure!(is_full_revision(revision), "发布插件必须使用完整提交 SHA");
+        let root = self.cache_root.join(revision);
+        let manifest = read_manifest(&root)?;
+        validate_host_compatibility(&manifest, env!("CARGO_PKG_VERSION"))?;
+        let runtime = manifest
+            .plugin
+            .runtime
+            .as_ref()
+            .context("发布插件缺少 plugin.runtime")?;
+        ensure!(
+            matches!(
+                runtime.kind,
+                PluginRuntime::PageDefinition | PluginRuntime::WasmComponent
+            ),
+            "发布接口当前只接受 page-definition 或 wasm-component artifact"
+        );
+        if runtime.kind == PluginRuntime::WasmComponent {
+            ensure!(
+                manifest.plugin.capabilities.network.is_empty()
+                    && manifest.plugin.capabilities.filesystem.is_empty()
+                    && !manifest.plugin.capabilities.database,
+                "当前 Wasm Component 宿主未授予网络、文件系统或数据库能力"
+            );
+        }
+        let validation_root = root.clone();
+        let report = tokio::task::spawn_blocking(move || validate_repository(&validation_root))
+            .await
+            .context("等待发布 artifact 校验失败")??;
+        let pages = if runtime.kind == PluginRuntime::PageDefinition {
+            serde_json::from_slice::<Vec<PageDefinition>>(
+                &tokio::fs::read(artifact_path(&root, &runtime.artifact)?).await?,
+            )
+            .context("解析已发布 PageDefinition 失败")?
+        } else {
+            Vec::new()
+        };
+        Ok(DiscoveredPlugin {
+            source_id: published_source_id(git),
+            git: git.to_owned(),
+            revision: revision.to_owned(),
+            runtime: report.runtime,
+            manifest: serde_json::to_value(&manifest.plugin)?,
+            pages,
+            artifact: runtime.artifact.clone(),
+        })
     }
 
     pub async fn registry(&self, source: &str) -> Result<Vec<MarketplaceEntry>> {
@@ -380,6 +435,10 @@ fn github_archive(git: &str, revision: Option<&str>) -> Result<Option<(reqwest::
 
 fn is_full_revision(revision: &str) -> bool {
     revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn published_source_id(git: &str) -> String {
+    format!("publish-{:x}", Sha256::digest(git.as_bytes()))
 }
 
 async fn download_archive(source: reqwest::Url, staging: &Path) -> Result<PathBuf> {

@@ -74,6 +74,16 @@ pub enum PluginState {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg(feature = "server")]
+pub enum PublishState {
+    Queued,
+    Running,
+    Active,
+    Failed,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg(feature = "server")]
 pub struct InstallPluginRequest {
@@ -113,11 +123,13 @@ pub struct PublishCredentialView {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg(feature = "server")]
 pub struct PublishedPluginView {
+    pub job_id: String,
     pub tenant_id: String,
     pub source_id: String,
     pub revision: String,
     pub runtime: PluginRuntime,
     pub page_count: usize,
+    pub state: PublishState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

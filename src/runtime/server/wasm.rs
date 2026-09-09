@@ -12,7 +12,8 @@ use wasmtime::{Collector, Config, Engine, Store, StoreLimits, StoreLimitsBuilder
 use crate::runtime::PluginRequest;
 use crate::runtime::{ComponentResponse, PageDefinition};
 
-const FUEL_PER_CALL: u64 = 10_000_000;
+const FUEL_PER_DEFINITION: u64 = 25_000_000;
+const FUEL_PER_HANDLER: u64 = 20_000_000;
 const MAX_CACHED_COMPONENTS: usize = 16;
 const MAX_WASM_MEMORY_BYTES: usize = 128 * 1024 * 1024;
 const MAX_WASM_TABLE_ELEMENTS: usize = 100_000;
@@ -140,7 +141,7 @@ impl WasmManager {
         let mut store = Store::new(&self.engine, StoreState { limits });
         store.limiter(|state| &mut state.limits);
         store
-            .set_fuel(FUEL_PER_CALL)
+            .set_fuel(FUEL_PER_HANDLER)
             .map_err(|error| anyhow!("设置 Wasm fuel 失败: {error:#}"))?;
         let instance = linker
             .instantiate(&mut store, component.as_ref())
@@ -196,7 +197,7 @@ fn call_definition(instance: &Arc<Mutex<TenantInstance>>) -> Result<Vec<PageDefi
         .map_err(|_| anyhow!("Wasm 租户实例锁已损坏"))?;
     instance
         .store
-        .set_fuel(FUEL_PER_CALL)
+        .set_fuel(FUEL_PER_DEFINITION)
         .map_err(|error| anyhow!("重置 Wasm fuel 失败: {error:#}"))?;
     let component = instance.instance;
     let handle = component
@@ -218,7 +219,7 @@ fn call_handler(
         .map_err(|_| anyhow!("Wasm 租户实例锁已损坏"))?;
     instance
         .store
-        .set_fuel(FUEL_PER_CALL)
+        .set_fuel(FUEL_PER_HANDLER)
         .map_err(|error| anyhow!("重置 Wasm fuel 失败: {error:#}"))?;
     let component = instance.instance;
     let handle = component

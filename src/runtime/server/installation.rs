@@ -13,7 +13,6 @@ use crate::runtime::PluginRuntime;
 pub(super) struct ActivatedPlugin {
     pub source_id: String,
     pub revision: String,
-    pub runtime: PluginRuntime,
     pub page_count: usize,
 }
 
@@ -80,7 +79,6 @@ pub(super) async fn activate(
     let activated = ActivatedPlugin {
         source_id: discovered.source_id.clone(),
         revision: discovered.revision.clone(),
-        runtime: discovered.runtime,
         page_count: discovered.pages.len(),
     };
     if let Err(error) = stop_previous_process(state, previous, instance.as_ref()).await {

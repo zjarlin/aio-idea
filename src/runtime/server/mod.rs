@@ -23,6 +23,8 @@ use anyhow::{Context as _, Result};
 use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 
+use crate::runtime::PublishState;
+
 pub use routes::router;
 pub use supervisor::run as run_supervisor;
 
@@ -71,6 +73,7 @@ impl RuntimeState {
         state.ensure_default_plugins().await?;
         state.reconcile_wasm().await?;
         state.reconcile_processes().await?;
+        state.resume_published_jobs().await?;
         Ok(state)
     }
 
@@ -106,6 +109,85 @@ impl RuntimeState {
                 }
             });
         }
+    }
+
+    fn start_publish_job(&self, job: publisher_store::PublishJob) {
+        if job.state != PublishState::Queued {
+            return;
+        }
+        let state = self.clone();
+        tokio::spawn(async move {
+            let claimed = match state.store.claim_publish_job(&job.id).await {
+                Ok(claimed) => claimed,
+                Err(error) => {
+                    eprintln!("领取插件发布任务失败: {}", error);
+                    return;
+                }
+            };
+            if !claimed {
+                return;
+            }
+            let _ = state
+                .store
+                .record_lifecycle_event(
+                    &job.tenant_id,
+                    &job.source_id,
+                    None,
+                    "publish-verify",
+                    "正在执行 Component ABI、页面定义和健康检查",
+                )
+                .await;
+            let result = async {
+                let discovered = state
+                    .repository
+                    .validate_published(&job.git, &job.revision)
+                    .await?;
+                installation::activate(
+                    &state,
+                    &job.tenant_id,
+                    discovered,
+                    "已校验 CI 发布的清单、artifact SHA-256 和运行时协议",
+                )
+                .await
+            }
+            .await;
+            let (publish_state, lifecycle, detail) = match result {
+                Ok(activated) => (
+                    PublishState::Active,
+                    "publish-active",
+                    format!(
+                        "版本 {} 已在线激活，共 {} 个页面",
+                        activated.revision, activated.page_count
+                    ),
+                ),
+                Err(error) => (
+                    PublishState::Failed,
+                    "publish-failed",
+                    format!("后台验证或激活失败，已保留上一活动版本: {error:#}"),
+                ),
+            };
+            if let Err(error) = state
+                .store
+                .finish_publish_job(&job.id, publish_state, &detail)
+                .await
+            {
+                eprintln!("记录插件发布任务结果失败: {}", error);
+            }
+            if let Err(error) = state
+                .store
+                .record_lifecycle_event(&job.tenant_id, &job.source_id, None, lifecycle, &detail)
+                .await
+            {
+                eprintln!("记录插件发布生命周期失败: {}", error);
+            }
+        });
+    }
+
+    async fn resume_published_jobs(&self) -> Result<()> {
+        for job in self.store.resume_publish_jobs().await? {
+            self.start_publish_job(job);
+        }
+        Ok(())
     }
 
     async fn ensure_default_plugins(&self) -> Result<()> {

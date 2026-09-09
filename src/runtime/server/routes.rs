@@ -26,7 +26,7 @@ use super::{
 use crate::runtime::{
     CreatePublishCredentialRequest, InstallPluginRequest, MarketplaceEntry, PageActionRequest,
     PageActionResult, PageBody, PageDefinition, PluginRequest, PublishCredentialView,
-    PublishPluginRequest, PublishedPluginView, RuntimeCatalog, RuntimeResponse,
+    PublishPluginRequest, PublishState, PublishedPluginView, RuntimeCatalog, RuntimeResponse,
 };
 
 pub fn router(state: RuntimeState) -> Router {
@@ -36,6 +36,7 @@ pub fn router(state: RuntimeState) -> Router {
         .route("/api/runtime/marketplace", get(marketplace))
         .route("/api/runtime/registries", post(add_registry))
         .route("/api/runtime/plugins/install", post(install))
+        .route("/api/runtime/publish-jobs/{job_id}", get(publish_job))
         .route(
             "/api/runtime/plugins/publish",
             post(publish).layer(DefaultBodyLimit::max(45 * 1024 * 1024)),
@@ -251,25 +252,73 @@ async fn publish(
         runtime: manifest.plugin.runtime.map(|runtime| runtime.kind),
         capabilities: manifest.plugin.capabilities,
     };
-    let discovered = state.repository.publish(&request).await?;
-    let activated = super::installation::activate(
-        &state,
-        &tenant_id,
-        discovered,
-        "已校验 CI 发布的清单、artifact SHA-256 和运行时协议",
-    )
-    .await?;
+    let staged = state.repository.stage_publish(&request).await?;
     state
         .store
         .upsert_published_marketplace_entry(&publication)
         .await?;
+    let source_id = state
+        .store
+        .source_id(&request.git)
+        .await?
+        .unwrap_or(staged.source_id.clone());
+    let job = state
+        .store
+        .queue_publish_job(
+            &tenant_id,
+            &source_id,
+            &request.git,
+            &request.rev,
+            staged.runtime,
+            staged.pages.len(),
+        )
+        .await?;
+    let _ = state
+        .store
+        .record_lifecycle_event(
+            &tenant_id,
+            &source_id,
+            None,
+            "publish-queued",
+            "已持久化 artifact，后台验证完成后原子激活",
+        )
+        .await;
+    if job.state == PublishState::Queued {
+        state.start_publish_job(job.clone());
+    }
     Ok(Json(RuntimeResponse {
         data: PublishedPluginView {
+            job_id: job.id,
             tenant_id,
-            source_id: activated.source_id,
-            revision: activated.revision,
-            runtime: activated.runtime,
-            page_count: activated.page_count,
+            source_id,
+            revision: request.rev,
+            runtime: staged.runtime,
+            page_count: staged.pages.len(),
+            state: job.state,
+        },
+    }))
+}
+
+async fn publish_job(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path(job_id): Path<String>,
+) -> Result<Json<RuntimeResponse<PublishedPluginView>>, RuntimeError> {
+    let session = authenticate_manager(&state, &headers).await?;
+    let job = state
+        .store
+        .publish_job(&session.tenant_id, &job_id)
+        .await?
+        .ok_or_else(|| RuntimeError::not_found("发布任务不存在"))?;
+    Ok(Json(RuntimeResponse {
+        data: PublishedPluginView {
+            job_id: job.id,
+            tenant_id: job.tenant_id,
+            source_id: job.source_id,
+            revision: job.revision,
+            runtime: job.runtime,
+            page_count: job.page_count,
+            state: job.state,
         },
     }))
 }
