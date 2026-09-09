@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+pub use az_plugin_manifest::{
+    CapabilityManifest, PageActionResult, PageBody, PageDefinition, PluginRuntime,
+};
 #[cfg(feature = "server")]
 pub use az_plugin_manifest::{ComponentResponse, PluginRequest};
-pub use az_plugin_manifest::{PageActionResult, PageBody, PageDefinition, PluginRuntime};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -60,6 +62,8 @@ pub struct InstalledPluginView {
     pub revision: String,
     pub runtime: PluginRuntime,
     pub state: PluginState,
+    #[serde(default)]
+    pub capabilities: CapabilityManifest,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -96,6 +100,8 @@ pub struct MarketplaceEntry {
     pub active_revision: Option<String>,
     #[serde(default)]
     pub runtime: Option<PluginRuntime>,
+    #[serde(default)]
+    pub capabilities: CapabilityManifest,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

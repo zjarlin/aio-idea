@@ -27,8 +27,8 @@ uuid = { version = "1.18.1", features = ["v4"], optional = true }
 wasmtime = { version = "48.0.0", default-features = false, features = ["anyhow", "component-model", "cranelift", "gc-drc", "runtime", "std"], optional = true }
 web-sys = { version = "0.3.77", features = ["Location", "Window"], optional = true }
 aio_plugin_account = { package = "aio-plugin-account", git = "https://github.com/zjarlin/aio-plugin-account.git", rev = "4501496f224147d5e68123b3eb1b91798a0a9517", optional = true }
-aio_plugin_marketplace_client = { package = "aio-plugin-marketplace-client", git = "https://github.com/zjarlin/aio-plugin-marketplace.git", rev = "700ac6a38a32d2435215e2931f02123aa18afe6c", optional = true }
-aio_plugin_marketplace_server = { package = "aio-plugin-marketplace-server", git = "https://github.com/zjarlin/aio-plugin-marketplace.git", rev = "700ac6a38a32d2435215e2931f02123aa18afe6c", optional = true }
+aio_plugin_marketplace_client = { package = "aio-plugin-marketplace-client", git = "https://github.com/zjarlin/aio-plugin-marketplace.git", rev = "9ce62cd3f2ff4c08a94dbe8ec6cd0f50b6a2993a", optional = true }
+aio_plugin_marketplace_server = { package = "aio-plugin-marketplace-server", git = "https://github.com/zjarlin/aio-plugin-marketplace.git", rev = "9ce62cd3f2ff4c08a94dbe8ec6cd0f50b6a2993a", optional = true }
 aio_plugin_settings = { package = "aio-plugin-settings", git = "https://github.com/zjarlin/aio-plugin-settings.git", rev = "4ce6e1f6cb9854b59c8e8d55e8e81288f02cbed1", optional = true }
 aio_plugin_identity_client = { package = "aio-plugin-identity-client", git = "https://github.com/zjarlin/aio-plugin-identity.git", rev = "c47f08e4e8c0b3349a5df4cb864626af80609c51", optional = true }
 aio_plugin_identity_server = { package = "aio-plugin-identity-server", git = "https://github.com/zjarlin/aio-plugin-identity.git", rev = "c47f08e4e8c0b3349a5df4cb864626af80609c51", optional = true }

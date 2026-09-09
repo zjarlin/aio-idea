@@ -568,6 +568,12 @@ async fn marketplace(
                 .iter()
                 .find(|plugin| plugin.git == entry.git)
                 .map(|plugin| plugin.runtime);
+            entry.capabilities = catalog
+                .plugins
+                .iter()
+                .find(|plugin| plugin.git == entry.git)
+                .map(|plugin| plugin.capabilities.clone())
+                .unwrap_or_default();
             if !entries
                 .iter()
                 .any(|current: &MarketplaceEntry| current.git == entry.git)
@@ -621,6 +627,7 @@ fn unlisted_entry(plugin: &crate::runtime::InstalledPluginView) -> MarketplaceEn
         state: Some(plugin.state),
         active_revision: Some(plugin.revision.clone()),
         runtime: Some(plugin.runtime),
+        capabilities: plugin.capabilities.clone(),
     }
 }
 

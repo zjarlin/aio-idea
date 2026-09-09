@@ -258,14 +258,14 @@ impl PluginStore {
         for row in rows {
             let source_id: String = row.try_get("id")?;
             let enabled: bool = row.try_get("enabled")?;
+            let manifest = serde_json::from_value::<PluginManifest>(row.try_get("manifest")?)
+                .context("解析已安装插件清单失败")?;
             let value: Value = row.try_get("pages")?;
             if enabled {
                 let revision_id: String = row.try_get("revision_id")?;
                 let mut plugin_pages = serde_json::from_value::<Vec<PageDefinition>>(value)?;
                 self.overlay_page_states(tenant_id, &revision_id, &mut plugin_pages)
                     .await?;
-                let manifest = serde_json::from_value::<PluginManifest>(row.try_get("manifest")?)
-                    .context("解析已安装插件清单失败")?;
                 account_items.extend(runtime_account_items(&source_id, &manifest, &plugin_pages)?);
                 pages.extend(plugin_pages);
             }
@@ -279,6 +279,7 @@ impl PluginStore {
                 } else {
                     PluginState::Disabled
                 },
+                capabilities: manifest.capabilities,
             });
         }
         ensure_unique_pages(&pages)?;
