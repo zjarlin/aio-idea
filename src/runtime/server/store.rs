@@ -61,15 +61,6 @@ CREATE TABLE IF NOT EXISTS plugin_registries (
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     UNIQUE(tenant_id, source)
 );
-CREATE TABLE IF NOT EXISTS plugin_publish_credentials (
-    id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    git TEXT NOT NULL,
-    token_hash TEXT NOT NULL UNIQUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    revoked_at TIMESTAMPTZ,
-    UNIQUE(tenant_id, git)
-);
 "#;
 
 pub struct PluginStore {
@@ -128,6 +119,7 @@ impl PluginStore {
             .await
             .context("创建插件运行时表失败")?;
         super::marketplace_store::migrate(&self.pool).await?;
+        super::publisher_store::migrate(&self.pool).await?;
         page_state::migrate(&self.pool).await?;
         Ok(())
     }
@@ -409,67 +401,6 @@ impl PluginStore {
     pub async fn add_registry(&self, tenant_id: &str, source: &str) -> Result<()> {
         sqlx::query("INSERT INTO plugin_registries (id, tenant_id, source) VALUES ($1, $2, $3) ON CONFLICT (tenant_id, source) DO UPDATE SET enabled = TRUE")
             .bind(uuid::Uuid::new_v4().to_string()).bind(tenant_id).bind(source).execute(&self.pool).await?;
-        Ok(())
-    }
-
-    pub async fn create_publish_credential(
-        &self,
-        tenant_id: &str,
-        git: &str,
-    ) -> Result<crate::runtime::PublishCredentialView> {
-        use sha2::{Digest as _, Sha256};
-
-        let token = format!(
-            "{}{}",
-            uuid::Uuid::new_v4().simple(),
-            uuid::Uuid::new_v4().simple()
-        );
-        let token_hash = format!("{:x}", Sha256::digest(token.as_bytes()));
-        let id = uuid::Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO plugin_publish_credentials (id, tenant_id, git, token_hash) VALUES ($1, $2, $3, $4) ON CONFLICT (tenant_id, git) DO UPDATE SET id = EXCLUDED.id, token_hash = EXCLUDED.token_hash, created_at = now(), revoked_at = NULL",
-        )
-        .bind(&id)
-        .bind(tenant_id)
-        .bind(git)
-        .bind(token_hash)
-        .execute(&self.pool)
-        .await?;
-        Ok(crate::runtime::PublishCredentialView {
-            id,
-            tenant_id: tenant_id.to_owned(),
-            git: git.to_owned(),
-            token,
-        })
-    }
-
-    pub async fn publisher_tenant(&self, git: &str, token: &str) -> Result<Option<String>> {
-        use sha2::{Digest as _, Sha256};
-
-        let token_hash = format!("{:x}", Sha256::digest(token.as_bytes()));
-        sqlx::query_scalar(
-            "SELECT tenant_id FROM plugin_publish_credentials WHERE git = $1 AND token_hash = $2 AND revoked_at IS NULL",
-        )
-        .bind(git)
-        .bind(token_hash)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(Into::into)
-    }
-
-    pub async fn revoke_publish_credential(
-        &self,
-        tenant_id: &str,
-        credential_id: &str,
-    ) -> Result<()> {
-        let result = sqlx::query(
-            "UPDATE plugin_publish_credentials SET revoked_at = now() WHERE id = $1 AND tenant_id = $2 AND revoked_at IS NULL",
-        )
-        .bind(credential_id)
-        .bind(tenant_id)
-        .execute(&self.pool)
-        .await?;
-        ensure!(result.rows_affected() == 1, "发布凭证不存在或已撤销");
         Ok(())
     }
 

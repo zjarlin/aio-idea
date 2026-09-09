@@ -4,6 +4,7 @@ mod lifecycle;
 mod marketplace_store;
 mod page_state;
 mod process;
+mod publisher_store;
 mod repository;
 mod request_context;
 mod routes;
@@ -63,10 +64,8 @@ impl RuntimeState {
             process,
             wasm,
             marketplace_syncing: Arc::new(Mutex::new(HashSet::new())),
-            marketplace_url: env::var("AIO_MARKETPLACE_URL").unwrap_or_else(|_| {
-                "https://raw.githubusercontent.com/zjarlin/aio/main/marketplace/index.json"
-                    .to_owned()
-            }),
+            marketplace_url: env::var("AIO_MARKETPLACE_URL")
+                .unwrap_or_else(|_| "https://github.com/zjarlin/aio.git".to_owned()),
         };
         state.sync_marketplace_sources([state.marketplace_url.clone()]);
         state.ensure_default_plugins().await?;

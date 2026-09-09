@@ -2,7 +2,7 @@ use anyhow::Context as _;
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{OriginalUri, Path, State},
+    extract::{DefaultBodyLimit, OriginalUri, Path, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{any, delete, get, post},
@@ -36,7 +36,10 @@ pub fn router(state: RuntimeState) -> Router {
         .route("/api/runtime/marketplace", get(marketplace))
         .route("/api/runtime/registries", post(add_registry))
         .route("/api/runtime/plugins/install", post(install))
-        .route("/api/runtime/plugins/publish", post(publish))
+        .route(
+            "/api/runtime/plugins/publish",
+            post(publish).layer(DefaultBodyLimit::max(45 * 1024 * 1024)),
+        )
         .route(
             "/api/runtime/publish-credentials",
             post(create_publish_credential),
