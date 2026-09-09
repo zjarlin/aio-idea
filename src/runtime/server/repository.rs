@@ -74,7 +74,10 @@ impl RepositoryInstaller {
             );
             let manifest = read_manifest(&checkout_root)?;
             validate_host_compatibility(&manifest, env!("CARGO_PKG_VERSION"))?;
-            let report = validate_repository(&checkout_root)?;
+            let validation_root = checkout_root.clone();
+            let report = tokio::task::spawn_blocking(move || validate_repository(&validation_root))
+                .await
+                .context("等待插件 artifact 校验失败")??;
             let runtime = manifest
                 .plugin
                 .runtime

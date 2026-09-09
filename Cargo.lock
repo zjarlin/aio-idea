@@ -523,13 +523,14 @@ dependencies = [
 [[package]]
 name = "az-plugin-manifest"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio.git?rev=96a95cf9406c3ea51cf8c8da7b421f010f38d783#96a95cf9406c3ea51cf8c8da7b421f010f38d783"
+source = "git+https://github.com/zjarlin/aio.git?rev=f7bab6fb66bc78316a75f92b5a84deaa35034e44#f7bab6fb66bc78316a75f92b5a84deaa35034e44"
 dependencies = [
  "anyhow",
  "semver",
  "serde",
  "serde_json",
  "toml 0.8.2",
+ "wasmtime",
  "wit-component 0.244.0",
  "wit-parser 0.244.0",
 ]
