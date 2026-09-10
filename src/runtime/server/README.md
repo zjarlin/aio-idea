@@ -6,6 +6,8 @@
 
 市场安装先按来源与可选 revision 查询已发布元数据。二进制包的 SHA-256 版本从 PostgreSQL 恢复缓存并重新校验，不访问远程 Git；不存在的包摘要不能当成 Git ref。旧 Git 安装仍锁定完整提交，不与包内容版本混用。
 
+二进制协议直接迁移到格式 2，旧开发包需要重新打包，不提供格式 1 兼容解码。共享协议支持 `plugin.frontend`，但当前宿主尚未实现隔离前端挂载，因此能力门禁拒绝此声明；已有 PageDefinition、Component 和 process 二进制发布不受影响。
+
 `POST /api/runtime/plugins/publish` 直接接收 `application/vnd.aio.plugin+gzip` 包字节，编解码和完整性验证统一复用 `az-plugin-package`。不接收旧 GitProof JSON，不要求 Actions 或已提交产物。完整包保存于 `plugin_packages.archive`，同来源同 SemVer 不可覆盖不同内容；后台任务通过协议验证和健康检查后原子激活，只有成功的版本才更新市场并允许下载。发布凭证仍绑定租户和 Git 来源，只能由 `AIO_PLUGIN_PUBLISH_ACCOUNTS` 明确授权的管理员创建和撤销。
 
 `GET /api/runtime/packages/<SHA-256>` 为已登录用户下载已成功激活的包。安装、启用、回滚和实例恢复可从数据库重建丢失缓存。发布最多两个并发操作，二进制中心默认 1024 个版本、2 GiB 存储；可通过 `AIO_PLUGIN_PACKAGE_MAX_REVISIONS` 和 `AIO_PLUGIN_PACKAGE_MAX_BYTES` 调整，配额在 PostgreSQL 事务锁内检查。

@@ -152,6 +152,7 @@ async fn exercise_http(
         None,
         manifest.clone(),
         pages.as_bytes(),
+        Default::default(),
     )?;
     let denied = client
         .post(&endpoint)
@@ -221,7 +222,14 @@ async fn exercise_http(
             .rev,
         second.rev
     );
-    let invalid = PluginPackage::new(git.clone(), "1.0.2".to_owned(), None, manifest, b"[]")?;
+    let invalid = PluginPackage::new(
+        git.clone(),
+        "1.0.2".to_owned(),
+        None,
+        manifest.clone(),
+        b"[]",
+        Default::default(),
+    )?;
     let rejected = client
         .post(&endpoint)
         .bearer_auth(token)
@@ -231,6 +239,27 @@ async fn exercise_http(
         .await?;
     assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
     active_revision(&client, base, &cookie, &first.rev).await?;
+    let frontend = PluginPackage::new(
+        git.clone(),
+        "1.0.3".to_owned(),
+        None,
+        format!("{manifest}\n[plugin.frontend]\npath='dist/web'\n"),
+        pages.as_bytes(),
+        [("index.html".to_owned(), b"<!doctype html>".to_vec())]
+            .into_iter()
+            .collect(),
+    )?;
+    let rejected = client
+        .post(&endpoint)
+        .bearer_auth(token)
+        .header(reqwest::header::CONTENT_TYPE, PACKAGE_CONTENT_TYPE)
+        .body(frontend.encode()?)
+        .send()
+        .await?;
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    assert!(rejected.text().await?.contains("隔离挂载"));
+    active_revision(&client, base, &cookie, &first.rev).await?;
+    assert!(state.store.package_archive(&frontend.rev).await?.is_none());
     let tenant = format!("tenant_{}", uuid::Uuid::new_v4().simple());
     sqlx::query("INSERT INTO tenants (id, label) VALUES ($1, 'Other Tenant')")
         .bind(&tenant)

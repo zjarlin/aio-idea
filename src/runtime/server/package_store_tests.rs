@@ -7,6 +7,7 @@ fn package(version: &str, artifact: &[u8]) -> Result<PluginPackage> {
         "https://github.com/example/offline.git".to_owned(), version.to_owned(), None,
         "[plugin.runtime]\nkind = 'page-definition'\nartifact = 'pages.json'\n[plugin.marketplace]\ntitle = 'Offline'\nsummary = 'Offline binary package'\nlicense = 'MIT'\ntags = ['test']\n[[plugin.subplugins]]\nid = 'offline'\npages = ['offline']\n".to_owned(),
         artifact,
+        Default::default(),
     )
 }
 

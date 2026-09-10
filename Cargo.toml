@@ -11,8 +11,8 @@ dill = "0.15.0"
 dioxus = { version = "=0.7.9", default-features = false, features = ["macro", "html", "signals"], optional = true }
 az-dioxus-admin-shell = { git = "https://github.com/zjarlin/dioxus-admin-workbench.git", rev = "86475520ed70465457fec636ebb001b1c9dc0bd8", default-features = false, optional = true }
 az-ui-components = { git = "https://github.com/zjarlin/dioxus-admin-workbench.git", rev = "86475520ed70465457fec636ebb001b1c9dc0bd8", optional = true }
-az-plugin-manifest = { git = "https://github.com/zjarlin/aio-platform.git", rev = "244b30bce587f0b87ca7b0fbc70960dea2fe7388", default-features = false }
-az-plugin-package = { git = "https://github.com/zjarlin/aio-platform.git", rev = "244b30bce587f0b87ca7b0fbc70960dea2fe7388", optional = true }
+az-plugin-manifest = { git = "https://github.com/zjarlin/aio-platform.git", rev = "e8f8defc9a0c59d51750741d4cd12a10e2b4dc19", default-features = false }
+az-plugin-package = { git = "https://github.com/zjarlin/aio-platform.git", rev = "e8f8defc9a0c59d51750741d4cd12a10e2b4dc19", optional = true }
 gloo-net = { version = "0.6.0", features = ["http", "json"], optional = true }
 flate2 = { version = "1.1.2", optional = true }
 reqwest = { version = "0.12.23", default-features = false, features = ["json", "rustls-tls"], optional = true }

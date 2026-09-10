@@ -32,6 +32,9 @@ fn RuntimePage(page: ApplicationRuntimePage) -> Element {
         serde_json::from_str::<PageBody>(&definition).map_err(|error| error.to_string())
     });
     match body() {
+        Ok(PageBody::Frontend { .. }) => rsx! {
+            p { role: "alert", "页面运行产物尚不可用" }
+        },
         Ok(PageBody::Counter { title, button }) => rsx! {
             RuntimeCounter { title, button }
         },

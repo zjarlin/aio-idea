@@ -37,6 +37,10 @@ pub(super) fn ensure_publish_runtime(runtime: PluginRuntime) -> Result<()> {
 pub(super) fn ensure_publish_capabilities(
     manifest: &az_plugin_manifest::RepositoryManifest,
 ) -> Result<()> {
+    ensure!(
+        manifest.plugin.frontend.is_none(),
+        "当前宿主尚未接通前端二进制隔离挂载，不能激活联合包"
+    );
     let capabilities = &manifest.plugin.capabilities;
     ensure!(
         capabilities.network.is_empty()

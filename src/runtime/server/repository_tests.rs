@@ -15,6 +15,7 @@ fn package_test_request(artifact: &[u8]) -> Result<PluginPackage> {
         None,
         "[plugin.runtime]\nkind = 'page-definition'\nartifact = 'dist/pages.json'\n\n[plugin.marketplace]\ntitle = 'Pages'\nsummary = 'Pages'\nlicense = 'MIT'\ntags = ['test']\n".to_owned(),
         artifact,
+        Default::default(),
     )
 }
 
@@ -134,6 +135,28 @@ fn accepts_binary_package_without_git_proof() -> Result<()> {
     let request = package_test_request(b"[]")?;
 
     validate_publish_payload(&request)?;
+    Ok(())
+}
+
+#[test]
+fn rejects_frontend_bundle_until_isolated_mount_is_available() -> Result<()> {
+    let original = package_test_request(b"[]")?;
+    let package = PluginPackage::new(
+        original.git,
+        original.version,
+        None,
+        format!(
+            "{}\n[plugin.frontend]\npath='dist/web'\n",
+            original.manifest_toml
+        ),
+        b"[]",
+        [("index.html".to_owned(), b"<!doctype html>".to_vec())]
+            .into_iter()
+            .collect(),
+    )?;
+    assert!(package.verify().is_ok());
+    let error = validate_publish_payload(&package).expect_err("前端挂载未接通前必须拒绝激活");
+    assert!(error.to_string().contains("隔离挂载"));
     Ok(())
 }
 
@@ -273,6 +296,7 @@ pages = ["published-page"]
 "#
         .to_owned(),
         artifact,
+        Default::default(),
     )?;
     let temporary = tempfile::tempdir()?;
     let installer = RepositoryInstaller::new(temporary.path().join("cache"));
@@ -319,6 +343,7 @@ database = false
 "#
         .to_owned(),
         artifact,
+        Default::default(),
     )?;
     let temporary = tempfile::tempdir()?;
     let installer = RepositoryInstaller::new(temporary.path().join("cache"));
