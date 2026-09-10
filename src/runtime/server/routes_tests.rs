@@ -1,4 +1,6 @@
 use az_plugin_manifest::{CapabilityManifest, PageActionDefinition, SceneDefinition};
+use flate2::{Compression, write::GzEncoder};
+use std::io::Write;
 
 use super::*;
 use crate::runtime::{InstalledPluginView, PluginRuntime, PluginState};
@@ -159,4 +161,39 @@ fn action_result_cannot_change_published_actions() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn decodes_gzip_publish_body() {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(br#"{"git":"https://example.com/plugin.git"}"#)
+        .unwrap();
+    let body = Bytes::from(encoder.finish().unwrap());
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+
+    let Ok(decoded) = decode_publish_body(&headers, &body) else {
+        panic!("gzip 发布请求应能解压");
+    };
+    assert_eq!(decoded, br#"{"git":"https://example.com/plugin.git"}"#);
+}
+
+#[test]
+fn rejects_unsupported_publish_encoding() {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("br"));
+
+    assert!(decode_publish_body(&headers, &Bytes::new()).is_err());
+}
+
+#[test]
+fn rejects_gzip_publish_body_over_decoded_limit() {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(b"12345").unwrap();
+    let body = Bytes::from(encoder.finish().unwrap());
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+
+    assert!(decode_publish_body_with_limit(&headers, &body, 4).is_err());
 }

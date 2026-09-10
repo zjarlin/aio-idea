@@ -7,7 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, delete, get, post},
 };
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use serde::Deserialize;
 use std::io::Read;
 
@@ -31,6 +31,8 @@ use crate::runtime::{
     PublishPluginRequest, PublishState, PublishedPluginView, RuntimeCatalog, RuntimeResponse,
 };
 
+const MAX_PUBLISH_BODY_BYTES: usize = 45 * 1024 * 1024;
+
 pub fn router(state: RuntimeState) -> Router {
     Router::new()
         .route("/api/runtime/catalog", get(catalog))
@@ -41,7 +43,7 @@ pub fn router(state: RuntimeState) -> Router {
         .route("/api/runtime/publish-jobs/{job_id}", get(publish_job))
         .route(
             "/api/runtime/plugins/publish",
-            post(publish).layer(DefaultBodyLimit::max(45 * 1024 * 1024)),
+            post(publish).layer(DefaultBodyLimit::max(MAX_PUBLISH_BODY_BYTES)),
         )
         .route(
             "/api/runtime/publish-credentials",
@@ -232,20 +234,7 @@ async fn publish(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<RuntimeResponse<PublishedPluginView>>, RuntimeError> {
-    let body = if headers
-        .get(header::CONTENT_ENCODING)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.eq_ignore_ascii_case("gzip"))
-    {
-        let mut decoder = GzDecoder::new(body.as_ref());
-        let mut decoded = Vec::new();
-        decoder.read_to_end(&mut decoded).map_err(|error| {
-            RuntimeError::bad_request(format!("发布请求 gzip 解压失败: {error}"))
-        })?;
-        decoded
-    } else {
-        body.to_vec()
-    };
+    let body = decode_publish_body(&headers, &body)?;
     let request: PublishPluginRequest = serde_json::from_slice(&body)
         .map_err(|error| RuntimeError::bad_request(format!("发布请求 JSON 无效: {error}")))?;
     let tenant_id =
@@ -315,6 +304,46 @@ async fn publish(
             state: job.state,
         },
     }))
+}
+
+fn decode_publish_body(headers: &HeaderMap, body: &Bytes) -> Result<Vec<u8>, RuntimeError> {
+    decode_publish_body_with_limit(headers, body, MAX_PUBLISH_BODY_BYTES)
+}
+
+fn decode_publish_body_with_limit(
+    headers: &HeaderMap,
+    body: &Bytes,
+    max_bytes: usize,
+) -> Result<Vec<u8>, RuntimeError> {
+    let encoding = headers
+        .get(header::CONTENT_ENCODING)
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| RuntimeError::bad_request("发布请求 Content-Encoding 无效"))
+        })
+        .transpose()?;
+    match encoding {
+        None => Ok(body.to_vec()),
+        Some(value) if value.eq_ignore_ascii_case("identity") => Ok(body.to_vec()),
+        Some(value) if value.eq_ignore_ascii_case("gzip") => {
+            let decoder = MultiGzDecoder::new(body.as_ref());
+            let mut decoded = Vec::new();
+            decoder
+                .take((max_bytes + 1) as u64)
+                .read_to_end(&mut decoded)
+                .map_err(|error| {
+                    RuntimeError::bad_request(format!("发布请求 gzip 解压失败: {error}"))
+                })?;
+            if decoded.len() > max_bytes {
+                return Err(RuntimeError::bad_request("发布请求解压后超过大小限制"));
+            }
+            Ok(decoded)
+        }
+        Some(_) => Err(RuntimeError::bad_request(
+            "发布请求只支持 identity 或 gzip Content-Encoding",
+        )),
+    }
 }
 
 async fn publish_job(
