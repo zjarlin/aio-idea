@@ -4,6 +4,8 @@
 
 市场请求只从 PostgreSQL 缓存读取。远程 HTTPS/Git registry 在启动和请求后异步刷新；刷新失败只保留最近成功索引并写入同步状态，不影响市场页面、已安装插件或租户组合。
 
+市场安装会先按 Git 来源和可选完整 revision 查询 `aio://published` 元数据。命中后只校验版本缓存中的已发布清单与 artifact，不访问远程 Git；缓存缺失会直接失败，不静默降级到网络。只有尚未发布或明确请求其他 revision 的仓库才进入受限 Git 发现流程。
+
 `POST /api/runtime/plugins/publish` 接收 CI 提交的锁定 SHA、清单、artifact、SHA-256，以及包含原始 commit 和路径所需 tree 对象的 `git_proof`。宿主离线校验 Git 对象哈希，并确认清单与 artifact 确实属于该 commit，无需在发布请求中回连远程 Git；随后复用安装事务的协议校验、健康检查、原子激活和回滚。只有激活成功的版本才更新市场缓存。发布凭证由 `plugin_publish_credentials` 按租户和 Git 来源限制，只有 `AIO_PLUGIN_PUBLISH_ACCOUNTS` 明确授权的平台账号可以通过运行时 API 创建或撤销；不使用全局 CI 发布令牌。
 
 宿主启动时从 PostgreSQL 的活动租户组合生成 process 实例白名单，并调用监督器清理不在白名单内的受管容器和隔离网络；数据库中的孤立 active 记录同时转为 stopped。

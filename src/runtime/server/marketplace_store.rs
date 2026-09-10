@@ -1,5 +1,5 @@
 use anyhow::{Context as _, Result};
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 
 use super::store::{PluginStore, parse_runtime, runtime_name};
 use crate::runtime::MarketplaceEntry;
@@ -59,6 +59,25 @@ pub(super) async fn upsert_published_marketplace_entry(
 }
 
 impl PluginStore {
+    pub async fn published_marketplace_entry(
+        &self,
+        git: &str,
+        requested_revision: Option<&str>,
+    ) -> Result<Option<MarketplaceEntry>> {
+        let row = sqlx::query(
+            "SELECT git, rev, title, summary, license, tags, runtime, capabilities FROM marketplace_entries WHERE source = $1 AND git = $2",
+        )
+        .bind(PUBLISHED_REGISTRY_SOURCE)
+        .bind(git)
+        .fetch_optional(&self.pool)
+        .await
+        .context("查询数据库已发布插件元数据失败")?;
+        row.map(marketplace_entry_from_row)
+            .transpose()
+            .context("解析数据库已发布插件元数据失败")
+            .map(|entry| entry.filter(|entry| revision_matches(&entry.rev, requested_revision)))
+    }
+
     pub async fn replace_marketplace_entries(
         &self,
         source: &str,
@@ -113,27 +132,35 @@ impl PluginStore {
         .bind(source)
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter()
-            .map(|row| {
-                let runtime = row
-                    .try_get::<Option<String>, _>("runtime")?
-                    .map(parse_runtime)
-                    .transpose()?;
-                Ok(MarketplaceEntry {
-                    git: row.try_get("git")?,
-                    rev: row.try_get("rev")?,
-                    title: row.try_get("title")?,
-                    summary: row.try_get("summary")?,
-                    license: row.try_get("license")?,
-                    tags: serde_json::from_value(row.try_get("tags")?)?,
-                    installed: false,
-                    source_id: None,
-                    state: None,
-                    active_revision: None,
-                    runtime,
-                    capabilities: serde_json::from_value(row.try_get("capabilities")?)?,
-                })
-            })
-            .collect()
+        rows.into_iter().map(marketplace_entry_from_row).collect()
     }
 }
+
+fn revision_matches(published: &str, requested: Option<&str>) -> bool {
+    requested.is_none_or(|requested| requested.eq_ignore_ascii_case(published))
+}
+
+fn marketplace_entry_from_row(row: PgRow) -> Result<MarketplaceEntry> {
+    let runtime = row
+        .try_get::<Option<String>, _>("runtime")?
+        .map(parse_runtime)
+        .transpose()?;
+    Ok(MarketplaceEntry {
+        git: row.try_get("git")?,
+        rev: row.try_get("rev")?,
+        title: row.try_get("title")?,
+        summary: row.try_get("summary")?,
+        license: row.try_get("license")?,
+        tags: serde_json::from_value(row.try_get("tags")?)?,
+        installed: false,
+        source_id: None,
+        state: None,
+        active_revision: None,
+        runtime,
+        capabilities: serde_json::from_value(row.try_get("capabilities")?)?,
+    })
+}
+
+#[cfg(test)]
+#[path = "marketplace_store_tests.rs"]
+mod tests;

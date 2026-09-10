@@ -215,18 +215,7 @@ async fn install(
     Json(request): Json<InstallPluginRequest>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
-    let discovered = state
-        .repository
-        .discover(&request.git, request.rev.as_deref())
-        .await?;
-    super::installation::activate(
-        &state,
-        &session.tenant_id,
-        discovered,
-        "已校验 Git 完整提交、清单和预构建 artifact",
-        None,
-    )
-    .await?;
+    super::installation::install(&state, &session.tenant_id, &request).await?;
     catalog_for(&state, &session).await
 }
 

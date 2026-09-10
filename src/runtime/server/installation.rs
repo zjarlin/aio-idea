@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 use super::{
     RuntimeState,
@@ -6,14 +6,58 @@ use super::{
         cleanup_new_process, cleanup_new_wasm, deactivate_previous_wasm, prepare_process,
         prepare_wasm, restore_process_binding, stop_previous_process,
     },
-    repository::DiscoveredPlugin,
+    repository::{DiscoveredPlugin, RepositoryInstaller},
 };
-use crate::runtime::{MarketplaceEntry, PluginRuntime};
+use crate::runtime::{InstallPluginRequest, MarketplaceEntry, PluginRuntime};
 
 pub(super) struct ActivatedPlugin {
     pub source_id: String,
     pub revision: String,
     pub page_count: usize,
+}
+
+pub(super) async fn install(
+    state: &RuntimeState,
+    tenant_id: &str,
+    request: &InstallPluginRequest,
+) -> Result<ActivatedPlugin> {
+    let publication = state
+        .store
+        .published_marketplace_entry(&request.git, request.rev.as_deref())
+        .await
+        .context("查找数据库已发布插件失败")?;
+    let (discovered, validation_detail) =
+        resolve_install_candidate(&state.repository, request, publication.as_ref()).await?;
+    activate(
+        state,
+        tenant_id,
+        discovered,
+        validation_detail,
+        publication.as_ref(),
+    )
+    .await
+}
+
+async fn resolve_install_candidate(
+    repository: &RepositoryInstaller,
+    request: &InstallPluginRequest,
+    publication: Option<&MarketplaceEntry>,
+) -> Result<(DiscoveredPlugin, &'static str)> {
+    if let Some(publication) = publication {
+        let discovered = repository
+            .validate_published(&publication.git, &publication.rev)
+            .await
+            .context("校验数据库已发布插件的本地 artifact 失败")?;
+        return Ok((
+            discovered,
+            "已校验数据库已发布 artifact 和市场元数据（未访问 Git）",
+        ));
+    }
+    let discovered = repository
+        .discover(&request.git, request.rev.as_deref())
+        .await
+        .context("从受限 Git 来源发现插件失败")?;
+    Ok((discovered, "已校验 Git 完整提交、清单和预构建 artifact"))
 }
 
 pub(super) async fn activate(
@@ -141,3 +185,7 @@ pub(super) async fn activate(
     )?;
     Ok(activated)
 }
+
+#[cfg(test)]
+#[path = "installation_tests.rs"]
+mod tests;
