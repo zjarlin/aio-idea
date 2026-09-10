@@ -157,17 +157,22 @@ impl PluginStore {
         job_id: &str,
         state: PublishState,
         detail: &str,
+        page_count: Option<usize>,
     ) -> Result<()> {
         ensure!(
             matches!(state, PublishState::Active | PublishState::Failed),
             "发布任务只能完成为 active 或 failed"
         );
+        let page_count = page_count
+            .map(|value| i32::try_from(value).context("发布页面数量超过数据库范围"))
+            .transpose()?;
         sqlx::query(
-            "UPDATE plugin_publish_jobs SET state = $2, detail = $3, updated_at = now() WHERE id = $1",
+            "UPDATE plugin_publish_jobs SET state = $2, detail = $3, page_count = COALESCE($4, page_count), updated_at = now() WHERE id = $1",
         )
         .bind(job_id)
         .bind(publish_state_name(state))
         .bind(detail)
+        .bind(page_count)
         .execute(&self.pool)
         .await?;
         Ok(())

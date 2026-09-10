@@ -151,24 +151,29 @@ impl RuntimeState {
                 .await
             }
             .await;
-            let (publish_state, lifecycle, detail) = match result {
-                Ok(activated) => (
-                    PublishState::Active,
-                    "publish-active",
-                    format!(
+            let (publish_state, lifecycle, detail, page_count) = match result {
+                Ok(activated) => {
+                    let detail = format!(
                         "版本 {} 已在线激活，共 {} 个页面",
                         activated.revision, activated.page_count
-                    ),
-                ),
+                    );
+                    (
+                        PublishState::Active,
+                        "publish-active",
+                        detail,
+                        Some(activated.page_count),
+                    )
+                }
                 Err(error) => (
                     PublishState::Failed,
                     "publish-failed",
                     format!("后台验证或激活失败，已保留上一活动版本: {error:#}"),
+                    None,
                 ),
             };
             if let Err(error) = state
                 .store
-                .finish_publish_job(&job.id, publish_state, &detail)
+                .finish_publish_job(&job.id, publish_state, &detail, page_count)
                 .await
             {
                 eprintln!("记录插件发布任务结果失败: {}", error);
