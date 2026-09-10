@@ -42,6 +42,7 @@ pub(super) struct PublishJob {
     pub runtime: PluginRuntime,
     pub page_count: usize,
     pub state: PublishState,
+    pub detail: String,
 }
 
 pub(super) struct PublisherBinding {
@@ -127,7 +128,7 @@ impl PluginStore {
     ) -> Result<PublishJob> {
         let id = uuid::Uuid::new_v4().to_string();
         let row = sqlx::query(
-            "INSERT INTO plugin_publish_jobs (id, tenant_id, source_id, git, revision, runtime, page_count, state, detail) VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', '已持久化 artifact，等待后台验证') ON CONFLICT (tenant_id, git, revision) DO UPDATE SET state = CASE WHEN plugin_publish_jobs.state = 'active' THEN 'active' ELSE 'queued' END, detail = CASE WHEN plugin_publish_jobs.state = 'active' THEN plugin_publish_jobs.detail ELSE '已持久化 artifact，等待后台验证' END, updated_at = now() RETURNING id, tenant_id, source_id, git, revision, runtime, page_count, state",
+            "INSERT INTO plugin_publish_jobs (id, tenant_id, source_id, git, revision, runtime, page_count, state, detail) VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', '已持久化 artifact，等待后台验证') ON CONFLICT (tenant_id, git, revision) DO UPDATE SET state = CASE WHEN plugin_publish_jobs.state = 'active' THEN 'active' ELSE 'queued' END, detail = CASE WHEN plugin_publish_jobs.state = 'active' THEN plugin_publish_jobs.detail ELSE '已持久化 artifact，等待后台验证' END, updated_at = now() RETURNING id, tenant_id, source_id, git, revision, runtime, page_count, state, detail",
         )
         .bind(id)
         .bind(tenant_id)
@@ -179,7 +180,7 @@ impl PluginStore {
         .execute(&self.pool)
         .await?;
         let rows = sqlx::query(
-            "SELECT id, tenant_id, source_id, git, revision, runtime, page_count, state FROM plugin_publish_jobs WHERE state = 'queued' ORDER BY created_at",
+            "SELECT id, tenant_id, source_id, git, revision, runtime, page_count, state, detail FROM plugin_publish_jobs WHERE state = 'queued' ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -192,7 +193,7 @@ impl PluginStore {
         job_id: &str,
     ) -> Result<Option<PublishJob>> {
         sqlx::query(
-            "SELECT id, tenant_id, source_id, git, revision, runtime, page_count, state FROM plugin_publish_jobs WHERE tenant_id = $1 AND id = $2",
+            "SELECT id, tenant_id, source_id, git, revision, runtime, page_count, state, detail FROM plugin_publish_jobs WHERE tenant_id = $1 AND id = $2",
         )
         .bind(tenant_id)
         .bind(job_id)
@@ -215,6 +216,7 @@ fn publish_job(row: sqlx::postgres::PgRow) -> Result<PublishJob> {
         runtime: super::store::parse_runtime(row.try_get("runtime")?)?,
         page_count: usize::try_from(page_count).context("发布任务页面数量无效")?,
         state: parse_publish_state(row.try_get("state")?)?,
+        detail: row.try_get("detail")?,
     })
 }
 

@@ -130,6 +130,7 @@ pub struct PublishedPluginView {
     pub runtime: PluginRuntime,
     pub page_count: usize,
     pub state: PublishState,
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

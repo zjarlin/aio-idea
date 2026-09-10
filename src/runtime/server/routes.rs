@@ -308,6 +308,7 @@ async fn publish(
             runtime: staged.runtime,
             page_count: staged.pages.len(),
             state: job.state,
+            detail: job.detail,
         },
     }))
 }
@@ -396,12 +397,13 @@ async fn publish_job(
     headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<PublishedPluginView>>, RuntimeError> {
-    let session = authenticate_manager(&state, &headers).await?;
+    let publisher = authenticate_publisher(&state, &headers).await?;
     let job = state
         .store
-        .publish_job(&session.tenant_id, &job_id)
+        .publish_job(&publisher.tenant_id, &job_id)
         .await?
         .ok_or_else(|| RuntimeError::not_found("发布任务不存在"))?;
+    authorize_publish_target(publisher, &job.git, None)?;
     Ok(Json(RuntimeResponse {
         data: PublishedPluginView {
             job_id: job.id,
@@ -411,6 +413,7 @@ async fn publish_job(
             runtime: job.runtime,
             page_count: job.page_count,
             state: job.state,
+            detail: job.detail,
         },
     }))
 }

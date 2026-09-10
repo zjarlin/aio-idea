@@ -36,8 +36,8 @@ pub(super) async fn authenticate_manager(
 }
 
 pub(super) struct PublisherContext {
-    tenant_id: String,
-    git: Option<String>,
+    pub tenant_id: String,
+    pub git: Option<String>,
 }
 
 pub(super) async fn authenticate_publisher(
