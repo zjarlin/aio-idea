@@ -24,7 +24,16 @@ async function authenticate(context, page) {
     assert(process.env.AIO_ACCOUNT && process.env.AIO_PASSWORD, "需要有效 Cookie 或 AIO_ACCOUNT/AIO_PASSWORD");
     await page.getByLabel("账号", { exact: true }).fill(process.env.AIO_ACCOUNT);
     await page.getByLabel("密码", { exact: true }).fill(process.env.AIO_PASSWORD);
+    const login = page.waitForResponse((response) => response.url().endsWith("/api/auth/login"));
+    const reload = page.waitForNavigation({ waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "登录", exact: true }).click();
+    assert((await login).ok(), "登录请求失败");
+    await reload;
+  }
+  if (process.env.AIO_TENANT_ID) {
+    const response = await context.request.post(`${baseURL}/api/tenants/switch`, { data: { tenant_id: process.env.AIO_TENANT_ID } });
+    assert(response.ok(), `切换测试租户失败: ${response.status()}`);
+    await page.goto(baseURL, { waitUntil: "domcontentloaded" });
   }
   await page.locator(".application-shell").waitFor({ state: "visible" });
 }
@@ -58,7 +67,11 @@ async function scenario(browser, mobile) {
   await context.route("**/api/runtime/catalog", async (route) => {
     const response = await route.fetch();
     const catalog = await response.json();
-    catalog.data.pages.push({ id: "account-extension-test", label: "社区账户扩展", icon: null, scene: { id: "community", label: "社区插件" }, required_permission: null, body: { kind: "counter", title: "社区账户扩展", button: "扩展 +1" } });
+    if (!catalog.data.pages.some((page) => page.label === "Hello")) {
+      catalog.data.pages.push({ id: "navigation-hello-test", label: "Hello", icon: null, scene: { id: "workspace", label: "工作区" }, menu_path: [], required_permission: null, body: { kind: "text", title: "Hello", content: "导航测试" } });
+    }
+    catalog.data.pages.push({ id: "navigation-state-test", label: "导航状态", icon: null, scene: { id: "community", label: "社区插件" }, menu_path: [], required_permission: null, body: { kind: "counter", title: "导航状态", button: "状态 +1" } });
+    catalog.data.pages.push({ id: "account-extension-test", label: "社区账户扩展", icon: null, scene: { id: "community", label: "社区插件" }, menu_path: [], required_permission: null, body: { kind: "counter", title: "社区账户扩展", button: "扩展 +1" } });
     catalog.data.account_items.push({ id: "open-account-extension-test", label: "社区账户扩展", icon: null, page_id: "account-extension-test", required_permission: null });
     await route.fulfill({ response, json: catalog });
   });
@@ -70,22 +83,53 @@ async function scenario(browser, mobile) {
     await authenticate(context, page);
     const sidebar = page.locator(".application-shell__sidebar");
     const sceneTabs = page.getByRole("navigation", { name: "场景" });
-    const menus = async () => sidebar.locator(".application-shell__navigation-button").allTextContents();
-    assert.deepEqual((await menus()).map((text) => text.trim()), ["首页", "Hello"]);
+    const labels = (container) => container.locator(".application-shell__navigation-button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
+    const menus = () => labels(sidebar);
+    assert.deepEqual(await menus(), ["首页", "Hello"]);
     assert.equal(await sidebar.locator(".application-shell__navigation-heading").count(), 0);
     for (const label of ["个人资料", "设置中心", "插件市场", "租户管理", "社区账户扩展"]) {
       assert.equal(await sidebar.getByRole("button", { name: label, exact: true }).count(), 0);
     }
 
     await sceneTabs.getByRole("button", { name: "系统", exact: true }).click();
-    assert.deepEqual((await menus()).map((text) => text.trim()), ["用户与权限"]);
+    if (mobile) await page.getByRole("button", { name: "打开菜单", exact: true }).click();
+    const systemNavigation = mobile ? page.getByRole("dialog") : sidebar;
+    assert.deepEqual(await labels(systemNavigation), [
+      "系统管理",
+      "用户管理",
+      "角色管理",
+      "字典管理",
+      "基础设施",
+      "文件管理",
+      "文件列表",
+    ]);
+    const systemManagement = systemNavigation.getByRole("button", { name: "系统管理", exact: true });
+    const infrastructure = systemNavigation.getByRole("button", { name: "基础设施", exact: true });
+    const fileManagement = systemNavigation.getByRole("button", { name: "文件管理", exact: true });
+    for (const group of [systemManagement, infrastructure, fileManagement]) {
+      assert.equal(await group.getAttribute("aria-expanded"), "true");
+    }
+    await systemManagement.click();
+    assert.equal(await systemManagement.getAttribute("aria-expanded"), "false");
+    for (const leaf of ["用户管理", "角色管理", "字典管理"]) {
+      assert.equal(await systemNavigation.getByRole("button", { name: leaf, exact: true }).count(), 0);
+    }
+    await systemManagement.click();
+    assert.equal(await systemManagement.getAttribute("aria-expanded"), "true");
+    await fileManagement.click();
+    assert.equal(await systemNavigation.getByRole("button", { name: "文件列表", exact: true }).count(), 0);
+    await fileManagement.click();
+    assert.equal(await systemNavigation.getByRole("button", { name: "文件列表", exact: true }).count(), 1);
+    if (mobile) await page.waitForTimeout(200);
+    await page.screenshot({ path: path.join(screenshotDir, `aio-system-tree-${mobile ? "mobile" : "desktop"}.png`), fullPage: true });
+    if (mobile) await page.getByRole("button", { name: "关闭菜单", exact: true }).click();
     await sceneTabs.getByRole("button", { name: "社区插件", exact: true }).click();
-    assert((await menus()).some((text) => text.includes("KMP")));
-    assert(!(await menus()).some((text) => /首页|Hello|用户与权限/.test(text)));
+    assert((await menus()).some((text) => text.includes("导航状态")));
+    assert(!(await menus()).some((text) => /首页|Hello|系统管理|用户管理|角色管理|字典管理|基础设施|文件管理/.test(text)));
 
     if (mobile) await page.getByRole("button", { name: "打开菜单", exact: true }).click();
     const navigation = mobile ? page.getByRole("dialog") : sidebar;
-    await navigation.getByRole("button", { name: "KMP 计数器", exact: true }).click();
+    await navigation.getByRole("button", { name: "导航状态", exact: true }).click();
     const content = page.locator(".application-shell__content");
     const counterButton = content.getByRole("button").first();
     await counterButton.click();

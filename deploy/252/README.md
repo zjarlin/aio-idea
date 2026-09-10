@@ -18,7 +18,7 @@ systemctl restart aio-idea-tunnel.service
 curl --fail https://aio.addzero.site/health
 ```
 
-每个发布目录必须同时包含服务端二进制、`web/` 和 `aio.toml`。进程插件由 root 监督器在无外网的独立容器中运行，主壳只通过 Unix socket 调用监督器，不加入 Docker 用户组。Wasm Component 在宿主重启时按租户恢复，首次启动窗口配置为 300 秒以容纳跨语言 Component 冷启动。`credentials.json` 和只包含数据库连接、初始管理员密码的 `/opt/aio-idea/runtime.env` 是服务器私密文件，不进入 Git。首次启动必须设置 `AIO_BOOTSTRAP_PASSWORD`。发布凭据只能由 `AIO_PLUGIN_PUBLISH_ACCOUNTS` 明确列出的平台账号创建或撤销；普通租户管理员仍可安装和管理租户插件，但不能认领全局 Git 发布来源。
+每个发布目录必须同时包含服务端二进制、`web/` 和 `aio.toml`。进程插件由 root 监督器在无外网的独立容器中运行，主壳只通过 Unix socket 调用监督器，不加入 Docker 用户组。Wasm Component 在宿主重启时按租户恢复，首次启动窗口配置为 300 秒以容纳跨语言 Component 冷启动。文件插件把内容写入发布目录之外的 `/opt/aio-idea/file-storage`，发布脚本负责创建并授权给 `aio-shell`；PostgreSQL 保存文件元数据。`credentials.json` 和只包含数据库连接、初始管理员密码的 `/opt/aio-idea/runtime.env` 是服务器私密文件，不进入 Git。首次启动必须设置 `AIO_BOOTSTRAP_PASSWORD`。发布凭据只能由 `AIO_PLUGIN_PUBLISH_ACCOUNTS` 明确列出的平台账号创建或撤销；普通租户管理员仍可安装和管理租户插件，但不能认领全局 Git 发布来源。
 
 ## Rust Source 发布
 

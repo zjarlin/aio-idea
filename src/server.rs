@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context as _, Result};
 use axum::{
     Json, Router,
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     routing::{any, get},
 };
 use tower_http::services::{ServeDir, ServeFile};
@@ -31,6 +31,12 @@ pub async fn run() -> Result<()> {
     let plugin_catalog = plugins::server_catalog()?;
     let identity = aio_plugin_identity_server::service(&plugin_catalog)?;
     identity.initialize().await?;
+    aio_plugin_dictionary_server::service(&plugin_catalog)?
+        .initialize()
+        .await?;
+    aio_plugin_file_server::service(&plugin_catalog)?
+        .initialize()
+        .await?;
     aio_plugin_rbac_server::service(&plugin_catalog)?
         .initialize()
         .await?;
@@ -40,7 +46,17 @@ pub async fn run() -> Result<()> {
         .merge(runtime::server::router(runtime))
         .merge(plugins::server_router(&plugin_catalog)?)
         .route("/api/{*path}", any(api_not_found))
-        .fallback_service(application);
+        .fallback_service(application)
+        .layer(axum::middleware::map_response(
+            |mut response: axum::response::Response| async move {
+                // 账户页面只允许装载本站隔离文档，阻止插件将自身导航到外部接收端。
+                response.headers_mut().append(
+                    header::CONTENT_SECURITY_POLICY,
+                    HeaderValue::from_static("frame-src 'self'; object-src 'none'"),
+                );
+                response
+            },
+        ));
     let address = SocketAddr::from((host, port));
     let listener = tokio::net::TcpListener::bind(address)
         .await

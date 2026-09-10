@@ -23,6 +23,7 @@ fn derives_account_item_from_declared_runtime_page() -> Result<()> {
             id: "account".to_owned(),
             label: "账户".to_owned(),
         },
+        menu_path: Vec::new(),
         required_permission: Some("profile:view".to_owned()),
         body: PageBody::Text {
             title: "个人资料".to_owned(),

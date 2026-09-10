@@ -6,7 +6,11 @@
 
 市场安装先按来源与可选 revision 查询已发布元数据。二进制包的 SHA-256 版本从 PostgreSQL 恢复缓存并重新校验，不访问远程 Git；不存在的包摘要不能当成 Git ref。旧 Git 安装仍锁定完整提交，不与包内容版本混用。
 
-二进制协议直接迁移到格式 2，旧开发包需要重新打包，不提供格式 1 兼容解码。共享协议支持 `plugin.frontend`，但当前宿主尚未实现隔离前端挂载，因此能力门禁拒绝此声明；已有 PageDefinition、Component 和 process 二进制发布不受影响。
+二进制协议直接迁移到格式 2，旧开发包需要重新打包，不提供格式 1 兼容解码。`plugin.frontend` 的静态资产与后端产物同包保存、校验和激活；`PageDefinition` 只声明入口路径，不保存渲染结果。
+
+`frontend_routes.rs` 提供前端挂载、只读资产、服务桥和卸载接口。`POST /api/runtime/frontend/mount` 接收 `page_id` 并返回 `data: {token, src, revision}`；`POST /api/runtime/frontend/<token>/request` 接收 `method/path/query/body` 并返回 `data: {status, content_type, body}`；`DELETE /api/runtime/frontend/<token>` 释放挂载。服务调用仍要求正常会话 Cookie，只读资产凭证不能替代登录。
+
+前端文档使用不含 `allow-same-origin` 的 CSP sandbox，只能取自身版本的资产。宿主 `frame-src 'self'` 阻止隔离文档导航到外部站点。每次取文件和调用服务都会重新检查原会话、租户、页面权限、来源、版本及激活代次；停用后再启用也不能复活旧挂载。资产摘要逐次校验，服务调用复用 `service_dispatch.rs` 并与生命周期切换共用锁。`AIO_PUBLIC_ORIGIN` 必须与实际浏览器宿主地址一致，默认 `https://aio.addzero.site`；本地验证允许 loopback HTTP。宿主最多 256 个挂载、每用户 16 个、有效期 30 分钟及 32 个并发前端请求。
 
 `POST /api/runtime/plugins/publish` 直接接收 `application/vnd.aio.plugin+gzip` 包字节，编解码和完整性验证统一复用 `az-plugin-package`。不接收旧 GitProof JSON，不要求 Actions 或已提交产物。完整包保存于 `plugin_packages.archive`，同来源同 SemVer 不可覆盖不同内容；后台任务通过协议验证和健康检查后原子激活，只有成功的版本才更新市场并允许下载。发布凭证仍绑定租户和 Git 来源，只能由 `AIO_PLUGIN_PUBLISH_ACCOUNTS` 明确授权的管理员创建和撤销。
 
@@ -25,3 +29,5 @@
 常规运行 `cargo test --no-default-features --features server`。包存储测试显式要求 `AIO_TEST_DATABASE_URL` 指向测试 PostgreSQL，运行 `stores_immutable_binary_packages_and_restores_deleted_cache -- --ignored`；它在临时 schema 中验证版本不可变、二进制持久化和缓存恢复。
 
 HTTP 联调运行 `binary_cli_publishes_downloads_recovers_and_rolls_back_over_http -- --ignored`，需要同值的 `AIO_TEST_DATABASE_URL` 与 `AIO_DATABASE_URL`、`AIO_TEST_CLI` 指向已构建的 CLI，以及测试用 `AIO_BOOTSTRAP_ACCOUNT`、`AIO_BOOTSTRAP_PASSWORD`、`AIO_PLUGIN_PUBLISH_ACCOUNTS`。只使用独立可丢弃的测试数据库。该测试通过真实 CLI 和 HTTP 验证无 Git 目录打包、上传、来源权限、版本冲突、下载、卸载重装、回滚、无效包保留活动版本以及租户切换；不依赖 Docker，也不作为 process 隔离验证的替代。
+
+`frontend_http_mounts_verified_assets_and_revokes_live_access -- --ignored` 使用同一测试数据库和启动账号，经真实 HTTP 验证挂载、CSP、声明外文件拒绝、资产篡改拒绝、权限撤销、启停、更新、租户切换、卸载及退出失效。它直接设置静态包活动绑定，不代替 CLI 发布与真实 Dioxus 浏览器验收。

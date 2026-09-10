@@ -139,7 +139,7 @@ fn accepts_binary_package_without_git_proof() -> Result<()> {
 }
 
 #[test]
-fn rejects_frontend_bundle_until_isolated_mount_is_available() -> Result<()> {
+fn accepts_frontend_bundle_with_declared_isolated_assets() -> Result<()> {
     let original = package_test_request(b"[]")?;
     let package = PluginPackage::new(
         original.git,
@@ -155,8 +155,43 @@ fn rejects_frontend_bundle_until_isolated_mount_is_available() -> Result<()> {
             .collect(),
     )?;
     assert!(package.verify().is_ok());
-    let error = validate_publish_payload(&package).expect_err("前端挂载未接通前必须拒绝激活");
-    assert!(error.to_string().contains("隔离挂载"));
+    assert_eq!(validate_publish_payload(&package)?.frontend.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn stages_complete_frontend_bundle_and_rejects_corrupted_cache() -> Result<()> {
+    let original = package_test_request(b"[]")?;
+    let package = PluginPackage::new(
+        original.git,
+        original.version,
+        None,
+        format!(
+            "{}\n[plugin.frontend]\npath='dist/web'\n",
+            original.manifest_toml
+        ),
+        b"[]",
+        [
+            ("index.html".to_owned(), b"<!doctype html>".to_vec()),
+            (
+                "assets/app.js".to_owned(),
+                b"export const count = 0;".to_vec(),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    )?;
+    let temporary = tempfile::tempdir()?;
+    let repository = RepositoryInstaller::new(temporary.path().to_path_buf());
+    repository.stage_publish(&package).await?;
+    let asset = temporary
+        .path()
+        .join(&package.rev)
+        .join("dist/web/assets/app.js");
+    assert_eq!(tokio::fs::read(&asset).await?, b"export const count = 0;");
+    repository.stage_publish(&package).await?;
+    tokio::fs::write(&asset, b"modified").await?;
+    assert!(repository.stage_publish(&package).await.is_err());
     Ok(())
 }
 

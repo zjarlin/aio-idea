@@ -15,6 +15,7 @@ impl ApplicationPlugin for HomePlugin {
                 id: "workspace",
                 label: "工作区",
             },
+            menu_path: Vec::new(),
             required_permission: None,
             render: HomePage,
         }]

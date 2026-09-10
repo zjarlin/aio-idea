@@ -33,7 +33,8 @@ fn main() {
 #[allow(non_snake_case)]
 fn App() -> dioxus::prelude::Element {
     use az_dioxus_admin_shell::{
-        ApplicationAccountItem, ApplicationRuntimePage, ApplicationUser, PluginApplication,
+        ApplicationAccountItem, ApplicationMenuGroup, ApplicationRuntimePage, ApplicationUser,
+        PluginApplication,
     };
     use dioxus::prelude::*;
 
@@ -108,6 +109,15 @@ fn App() -> dioxus::prelude::Element {
             icon: page.icon,
             scene_id: page.scene.id,
             scene_label: page.scene.label,
+            menu_path: page
+                .menu_path
+                .into_iter()
+                .map(|group| ApplicationMenuGroup {
+                    id: group.id,
+                    label: group.label,
+                    icon: group.icon,
+                })
+                .collect(),
             required_permission: page.required_permission,
             definition: serde_json::to_string(&page.body).unwrap_or_default(),
         })

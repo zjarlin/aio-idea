@@ -1,6 +1,7 @@
 use anyhow::{Context as _, Result, ensure};
 use az_plugin_manifest::{
-    artifact_path, read_manifest, validate_declared_pages, validate_page_definitions,
+    artifact_path, frontend_files, read_manifest, validate_declared_pages, validate_frontend_pages,
+    validate_page_definitions,
 };
 use az_plugin_package::PluginPackage;
 use sha2::{Digest as _, Sha256};
@@ -31,6 +32,11 @@ impl RepositoryInstaller {
                 .context("解析插件包 PageDefinition 失败")?;
             validate_page_definitions(&pages)?;
             validate_declared_pages(&publication.manifest, &pages)?;
+            validate_frontend_pages(
+                &publication.manifest,
+                &pages,
+                publication.frontend.keys().map(String::as_str),
+            )?;
             pages
         } else {
             Vec::new()
@@ -55,6 +61,21 @@ impl RepositoryInstaller {
                         == package.artifact_sha256,
                     "插件包缓存 artifact SHA-256 不一致"
                 );
+                let cached_frontend = frontend_files(&directory, &publication.manifest)?;
+                ensure!(
+                    cached_frontend.len() == package.frontend.len(),
+                    "插件包缓存前端文件集合不一致"
+                );
+                for (path, asset) in &package.frontend {
+                    let file = cached_frontend
+                        .get(path)
+                        .context("插件包缓存缺少前端文件")?;
+                    ensure!(
+                        format!("{:x}", Sha256::digest(tokio::fs::read(file).await?))
+                            == asset.sha256,
+                        "插件包缓存前端 SHA-256 不一致: {path}"
+                    );
+                }
             } else {
                 tokio::fs::create_dir_all(&staging).await?;
                 tokio::fs::write(staging.join("aio-plugin.toml"), &package.manifest_toml).await?;
@@ -62,6 +83,16 @@ impl RepositoryInstaller {
                 tokio::fs::create_dir_all(artifact.parent().context("插件 artifact 缺少父目录")?)
                     .await?;
                 tokio::fs::write(&artifact, &publication.artifact).await?;
+                if let Some(frontend) = &publication.manifest.plugin.frontend {
+                    for (path, bytes) in &publication.frontend {
+                        let file = staging.join(&frontend.path).join(path);
+                        tokio::fs::create_dir_all(file.parent().context("前端文件缺少父目录")?)
+                            .await?;
+                        tokio::fs::write(file, bytes)
+                            .await
+                            .context("写入前端产物失败")?;
+                    }
+                }
                 self.ensure_cache_quota(true).await?;
                 tokio::fs::rename(&staging, &directory)
                     .await

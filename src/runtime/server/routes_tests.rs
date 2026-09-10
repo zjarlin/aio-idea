@@ -1,5 +1,6 @@
 use az_plugin_manifest::{CapabilityManifest, PageActionDefinition, SceneDefinition};
 
+use super::super::service_dispatch::ensure_route_allowed;
 use super::*;
 use crate::runtime::{InstalledPluginView, PluginRuntime, PluginState};
 
@@ -12,6 +13,7 @@ fn action_page(required_permission: Option<&str>) -> PageDefinition {
             id: "examples".to_owned(),
             label: "Examples".to_owned(),
         },
+        menu_path: Vec::new(),
         required_permission: required_permission.map(str::to_owned),
         body: PageBody::Actions {
             title: "Counter".to_owned(),

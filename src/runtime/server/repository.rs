@@ -8,8 +8,8 @@ use std::{
 
 use anyhow::{Context as _, Result, ensure};
 use az_plugin_manifest::{
-    artifact_path, read_manifest, validate_declared_pages, validate_host_compatibility,
-    validate_page_definitions, validate_repository,
+    artifact_path, frontend_files, read_manifest, validate_declared_pages, validate_frontend_pages,
+    validate_host_compatibility, validate_page_definitions, validate_repository,
 };
 use flate2::read::GzDecoder;
 use serde_json::Value;
@@ -254,9 +254,12 @@ impl RepositoryInstaller {
             is_artifact_revision(revision),
             "插件 revision 必须是完整 Git SHA 或插件包 SHA-256"
         );
-        let manifest = read_manifest(&self.cache_root.join(revision))?;
+        let root = self.cache_root.join(revision);
+        let manifest = read_manifest(&root)?;
         validate_page_definitions(pages)?;
-        validate_declared_pages(&manifest, pages)
+        validate_declared_pages(&manifest, pages)?;
+        let files = frontend_files(&root, &manifest)?;
+        validate_frontend_pages(&manifest, pages, files.keys().map(String::as_str))
     }
 
     pub(super) async fn ensure_cache_quota(&self, adds_revision: bool) -> Result<()> {

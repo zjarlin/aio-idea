@@ -9,7 +9,7 @@ use axum::{
 };
 
 use super::{
-    RuntimeState,
+    RuntimeState, frontend_routes,
     http_error::RuntimeError,
     lifecycle::{
         cleanup_new_process, cleanup_new_wasm, deactivate_bound_wasm, deactivate_previous_wasm,
@@ -23,6 +23,7 @@ use super::{
         authenticate, authenticate_manager, authenticate_publisher, authorize_publish_target,
         catalog_for, catalog_value, permitted,
     },
+    service_dispatch::{ServiceCall, dispatch},
 };
 use crate::runtime::{
     InstallPluginRequest, MarketplaceEntry, PageActionRequest, PageActionResult, PageBody,
@@ -31,6 +32,19 @@ use crate::runtime::{
 
 pub fn router(state: RuntimeState) -> Router {
     Router::new()
+        .route("/api/runtime/frontend/mount", post(frontend_routes::mount))
+        .route(
+            "/api/runtime/frontend/assets/{token}/{*path}",
+            get(frontend_routes::asset),
+        )
+        .route(
+            "/api/runtime/frontend/{token}/request",
+            post(frontend_routes::request),
+        )
+        .route(
+            "/api/runtime/frontend/{token}",
+            delete(frontend_routes::unmount),
+        )
         .route("/api/runtime/catalog", get(catalog))
         .route("/api/runtime/pages/action", post(page_action))
         .route("/api/runtime/marketplace", get(marketplace))
@@ -86,7 +100,7 @@ async fn page_action(
     let session = authenticate(&state, &headers).await?;
     let binding = state
         .store
-        .active_page_service(&session.tenant_id, &request.page_id)
+        .active_page_binding(&session.tenant_id, &request.page_id)
         .await?
         .ok_or_else(|| RuntimeError::not_found("当前租户没有提供该页面的活动插件"))?;
     ensure_page_action_allowed(&binding.page, &request.action_id, &session.permissions)?;
@@ -555,75 +569,31 @@ async fn service(
     body: Bytes,
 ) -> Result<Response, RuntimeError> {
     let session = authenticate(&state, &headers).await?;
+    let lock = state.activation_lock(&session.tenant_id, &source_id)?;
+    let _guard = lock.lock().await;
     let binding = state
         .store
         .active_service(&session.tenant_id, &source_id)
         .await?
         .ok_or_else(|| RuntimeError::not_found("当前租户没有活动的服务插件"))?;
-    ensure_route_allowed(&binding.routes, &path)?;
     let path = format!("/{path}");
-    match binding.runtime {
-        crate::runtime::PluginRuntime::WasmComponent => {
-            let body = String::from_utf8(body.to_vec())
-                .map_err(|_| RuntimeError::bad_request("Wasm Component 请求体必须是 UTF-8"))?;
-            let request = serde_json::to_string(&PluginRequest::ServiceRequest {
-                method: method.as_str().to_owned(),
-                path,
-                query: uri.query().map(str::to_owned),
-                body,
-                tenant_id: session.tenant_id.clone(),
-                user_id: session.user_id.clone(),
-            })
-            .context("序列化 Wasm 服务请求失败")?;
-            let manager = state.wasm.clone();
-            let tenant_id = session.tenant_id.clone();
-            let revision = binding.revision.clone();
-            let output = tokio::task::spawn_blocking(move || {
-                manager.handle(&tenant_id, &source_id, &revision, request)
-            })
-            .await
-            .map_err(|error| {
-                RuntimeError::bad_request(format!("等待 Wasm 请求处理失败: {error}"))
-            })??;
-            let status = StatusCode::from_u16(output.status)
-                .map_err(|_| RuntimeError::bad_request("Wasm Component 返回了无效状态码"))?;
-            response(status, Some(&output.content_type), output.body.into_bytes())
-        }
-        crate::runtime::PluginRuntime::Process => {
-            let endpoint = binding
-                .endpoint
-                .as_deref()
-                .context("process 插件缺少活动 endpoint")?;
-            let content_type = headers
+    let output = dispatch(
+        &state,
+        &session,
+        &source_id,
+        &binding,
+        ServiceCall {
+            method: method.as_str(),
+            path: &path,
+            query: uri.query(),
+            body: body.to_vec(),
+            content_type: headers
                 .get(header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok());
-            let output = state
-                .process
-                .request(
-                    endpoint,
-                    method.as_str(),
-                    &path,
-                    uri.query(),
-                    body.to_vec(),
-                    content_type,
-                    &session.tenant_id,
-                    &session.user_id,
-                )
-                .await?;
-            response(output.status, output.content_type.as_deref(), output.body)
-        }
-        _ => Err(RuntimeError::not_found("当前插件不提供动态服务")),
-    }
-}
-
-fn ensure_route_allowed(routes: &[String], path: &str) -> Result<(), RuntimeError> {
-    if routes
-        .iter()
-        .any(|route| path == route || path.starts_with(&format!("{route}/")))
-    {
-        return Ok(());
-    }
-    Err(RuntimeError::not_found("插件清单未声明该服务路由"))
+                .and_then(|value| value.to_str().ok()),
+        },
+    )
+    .await?;
+    response(output.status, output.content_type.as_deref(), output.body)
 }
 
 fn response(

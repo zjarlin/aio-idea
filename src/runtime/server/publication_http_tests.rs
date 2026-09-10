@@ -49,6 +49,9 @@ async fn binary_cli_publishes_downloads_recovers_and_rolls_back_over_http() -> R
         marketplace_syncing: Arc::new(Mutex::new(HashSet::new())),
         activation_locks: Arc::new(Mutex::new(HashMap::new())),
         publication_slots: Arc::new(tokio::sync::Semaphore::new(2)),
+        frontend: Arc::new(super::frontend_access::FrontendAccess::new(
+            "http://localhost",
+        )?),
         process: Arc::new(ProcessManager::new()?),
         wasm: Arc::new(WasmManager::new()?),
     };
@@ -249,17 +252,11 @@ async fn exercise_http(
             .into_iter()
             .collect(),
     )?;
-    let rejected = client
-        .post(&endpoint)
-        .bearer_auth(token)
-        .header(reqwest::header::CONTENT_TYPE, PACKAGE_CONTENT_TYPE)
-        .body(frontend.encode()?)
-        .send()
-        .await?;
-    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
-    assert!(rejected.text().await?.contains("隔离挂载"));
-    active_revision(&client, base, &cookie, &first.rev).await?;
-    assert!(state.store.package_archive(&frontend.rev).await?.is_none());
+    let frontend_file = root.join("frontend.aio-plugin");
+    tokio::fs::write(&frontend_file, frontend.encode()?).await?;
+    publish_cli(cli, &frontend_file, &endpoint, token, root).await?;
+    active_revision(&client, base, &cookie, &frontend.rev).await?;
+    assert!(state.store.package_archive(&frontend.rev).await?.is_some());
     let tenant = format!("tenant_{}", uuid::Uuid::new_v4().simple());
     sqlx::query("INSERT INTO tenants (id, label) VALUES ($1, 'Other Tenant')")
         .bind(&tenant)

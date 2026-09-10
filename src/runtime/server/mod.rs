@@ -1,4 +1,14 @@
 mod activation_store;
+mod frontend_access;
+#[cfg(test)]
+mod frontend_browser_tests;
+mod frontend_document;
+#[cfg(test)]
+mod frontend_http_tests;
+mod frontend_model;
+mod frontend_routes;
+#[cfg(test)]
+mod frontend_tests;
 mod http_error;
 mod installation;
 mod lifecycle;
@@ -17,6 +27,7 @@ mod remote_access;
 mod repository;
 mod request_context;
 mod routes;
+mod service_dispatch;
 mod source_migration;
 mod store;
 mod supervisor;
@@ -47,6 +58,7 @@ pub struct RuntimeState {
     marketplace_syncing: Arc<Mutex<HashSet<String>>>,
     activation_locks: Arc<Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>>,
     publication_slots: Arc<tokio::sync::Semaphore>,
+    frontend: Arc<frontend_access::FrontendAccess>,
     pub process: Arc<process::ProcessManager>,
     pub wasm: Arc<wasm::WasmManager>,
 }
@@ -80,6 +92,10 @@ impl RuntimeState {
             marketplace_syncing: Arc::new(Mutex::new(HashSet::new())),
             activation_locks: Arc::new(Mutex::new(HashMap::new())),
             publication_slots: Arc::new(tokio::sync::Semaphore::new(2)),
+            frontend: Arc::new(frontend_access::FrontendAccess::new(
+                &env::var("AIO_PUBLIC_ORIGIN")
+                    .unwrap_or_else(|_| "https://aio.addzero.site".to_owned()),
+            )?),
             marketplace_url: env::var("AIO_MARKETPLACE_URL")
                 .unwrap_or_else(|_| "https://github.com/zjarlin/aio-platform.git".to_owned()),
         };

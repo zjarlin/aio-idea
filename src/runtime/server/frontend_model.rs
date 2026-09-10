@@ -1,0 +1,23 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MountRequest {
+    pub page_id: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct MountResponse {
+    pub token: String,
+    pub src: String,
+    pub revision: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FrontendRequest {
+    pub method: String,
+    pub path: String,
+    pub query: Option<String>,
+    pub body: String,
+}

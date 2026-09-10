@@ -89,8 +89,9 @@ pub struct ServiceBinding {
     pub routes: Vec<String>,
 }
 
-pub struct PageServiceBinding {
+pub struct PageBinding {
     pub source_id: String,
+    pub activation_generation: String,
     pub revision_id: String,
     pub state_generation: Option<i64>,
     pub page: PageDefinition,
@@ -388,13 +389,13 @@ impl PluginStore {
         .transpose()
     }
 
-    pub async fn active_page_service(
+    pub async fn active_page_binding(
         &self,
         tenant_id: &str,
         page_id: &str,
-    ) -> Result<Option<PageServiceBinding>> {
+    ) -> Result<Option<PageBinding>> {
         let rows = sqlx::query(
-            "SELECT sources.id AS source_id, revisions.id AS revision_id, revisions.revision, revisions.runtime, revisions.manifest, revisions.pages, instances.endpoint FROM tenant_plugin_bindings bindings JOIN plugin_sources sources ON sources.id = bindings.source_id JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id LEFT JOIN LATERAL (SELECT endpoint FROM plugin_runtime_instances WHERE tenant_id = bindings.tenant_id AND revision_id = revisions.id AND state = 'active' ORDER BY started_at DESC LIMIT 1) instances ON TRUE WHERE bindings.tenant_id = $1 AND bindings.enabled = TRUE AND revisions.runtime IN ('wasm-component', 'process') ORDER BY sources.id",
+            "SELECT sources.id AS source_id, bindings.updated_at::TEXT AS activation_generation, revisions.id AS revision_id, revisions.revision, revisions.runtime, revisions.manifest, revisions.pages, instances.endpoint FROM tenant_plugin_bindings bindings JOIN plugin_sources sources ON sources.id = bindings.source_id JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id LEFT JOIN LATERAL (SELECT endpoint FROM plugin_runtime_instances WHERE tenant_id = bindings.tenant_id AND revision_id = revisions.id AND state = 'active' ORDER BY started_at DESC LIMIT 1) instances ON TRUE WHERE bindings.tenant_id = $1 AND bindings.enabled = TRUE ORDER BY sources.id",
         )
         .bind(tenant_id)
         .fetch_all(&self.pool)
@@ -411,8 +412,9 @@ impl PluginStore {
             };
             ensure!(binding.is_none(), "活动插件页面 id 重复: {page_id}");
             let manifest = serde_json::from_value::<PluginManifest>(row.try_get("manifest")?)?;
-            binding = Some(PageServiceBinding {
+            binding = Some(PageBinding {
                 source_id: row.try_get("source_id")?,
+                activation_generation: row.try_get("activation_generation")?,
                 revision_id,
                 state_generation: generations.get(page_id).copied(),
                 page,
