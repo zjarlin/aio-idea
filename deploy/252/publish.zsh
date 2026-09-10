@@ -45,7 +45,7 @@ cargo check --no-default-features --features web
 print "构建 glibc 2.17 服务端"
 cargo zigbuild --release --target "$target" --no-default-features --features server
 print "构建 Web 资产"
-dx build --platform web --release
+dx build --platform web --release --debug-symbols false
 
 readonly release="$artifact/release"
 mkdir -p "$release"

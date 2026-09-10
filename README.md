@@ -4,6 +4,8 @@
 
 插件开发先让 AI 阅读 AIO 仓库的 `aio-plugin-development` Skill 和对应语言规约。
 
+顶部场景选择当前菜单树的根，侧栏只显示当前场景的业务菜单。账户插件贡献的个人资料、设置、市场和租户切换页面从左下角进入独立全屏视图，点击“返回主后台”后保留原场景、页面及页面内部状态；账户页面不会重复出现在侧栏。此规则由共享壳处理，也适用于运行时子插件贡献的账户页面。
+
 ```bash
 dx serve
 cargo run --no-default-features --features desktop

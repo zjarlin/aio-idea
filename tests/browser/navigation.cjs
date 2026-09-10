@@ -1,0 +1,112 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { chromium } = require("playwright");
+
+const baseURL = process.env.AIO_URL || "http://127.0.0.1:4174";
+const screenshotDir = process.env.AIO_SCREENSHOT_DIR || os.tmpdir();
+
+async function authenticate(context, page) {
+  if (process.env.AIO_COOKIE_FILE) {
+    const cookies = fs.readFileSync(process.env.AIO_COOKIE_FILE, "utf8")
+      .split(/\r?\n/)
+      .filter((line) => line && (!line.startsWith("#") || line.startsWith("#HttpOnly_")))
+      .map((line) => {
+        const [, , cookiePath, secure, expires, name, value] = line.replace(/^#HttpOnly_/, "").split("\t");
+        return { name, value, url: new URL(cookiePath, baseURL).href, httpOnly: line.startsWith("#HttpOnly_"), secure: new URL(baseURL).protocol === "https:" && secure === "TRUE", ...(Number(expires) > 0 ? { expires: Number(expires) } : {}) };
+      });
+    await context.addCookies(cookies);
+  }
+  await page.goto(baseURL, { waitUntil: "domcontentloaded" });
+  await page.locator('.application-shell, input[aria-label="账号"]').first().waitFor();
+  if (await page.getByRole("button", { name: "登录", exact: true }).isVisible()) {
+    assert(process.env.AIO_ACCOUNT && process.env.AIO_PASSWORD, "需要有效 Cookie 或 AIO_ACCOUNT/AIO_PASSWORD");
+    await page.getByLabel("账号", { exact: true }).fill(process.env.AIO_ACCOUNT);
+    await page.getByLabel("密码", { exact: true }).fill(process.env.AIO_PASSWORD);
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+  }
+  await page.locator(".application-shell").waitFor({ state: "visible" });
+}
+
+async function assertFits(page) {
+  const dimensions = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth }));
+  assert(dimensions.scrollWidth <= dimensions.width, JSON.stringify(dimensions));
+}
+
+async function openAccountPage(page, label, mobile) {
+  if (mobile) await page.getByRole("button", { name: "打开菜单", exact: true }).click();
+  const container = mobile ? page.getByRole("dialog") : page.locator(".application-shell__sidebar");
+  await container.locator('button[aria-label$="的账户菜单"]').click();
+  await page.getByRole("menuitem", { name: label, exact: true }).click();
+  await page.locator(".application-fullscreen").waitFor();
+  assert.equal(await page.locator(".application-shell:visible").count(), 0);
+  assert.equal(await page.locator(".application-shell__mobile-dialog:visible").count(), 0);
+  assert.equal(await page.getByRole("navigation", { name: "场景" }).count(), 0);
+  await assertFits(page);
+}
+
+async function returnToWorkspace(page) {
+  await page.getByRole("button", { name: "返回主后台", exact: true }).click();
+  await page.locator(".application-fullscreen").waitFor({ state: "detached" });
+  await page.locator(".application-shell").waitFor({ state: "visible" });
+}
+
+async function scenario(browser, mobile) {
+  const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, isMobile: mobile });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+  try {
+    await authenticate(context, page);
+    const sidebar = page.locator(".application-shell__sidebar");
+    const sceneTabs = page.getByRole("navigation", { name: "场景" });
+    const menus = async () => sidebar.locator(".application-shell__navigation-button").allTextContents();
+    assert.deepEqual((await menus()).map((text) => text.trim()), ["首页", "Hello"]);
+    assert.equal(await sidebar.locator(".application-shell__navigation-heading").count(), 0);
+    for (const label of ["个人资料", "设置中心", "插件市场", "租户管理"]) {
+      assert.equal(await sidebar.getByRole("button", { name: label, exact: true }).count(), 0);
+    }
+
+    await sceneTabs.getByRole("button", { name: "系统", exact: true }).click();
+    assert.deepEqual((await menus()).map((text) => text.trim()), ["用户与权限"]);
+    await sceneTabs.getByRole("button", { name: "社区插件", exact: true }).click();
+    assert((await menus()).some((text) => text.includes("KMP")));
+    assert(!(await menus()).some((text) => /首页|Hello|用户与权限/.test(text)));
+
+    if (mobile) await page.getByRole("button", { name: "打开菜单", exact: true }).click();
+    const navigation = mobile ? page.getByRole("dialog") : sidebar;
+    await navigation.getByRole("button", { name: "KMP 计数器", exact: true }).click();
+    const content = page.locator(".application-shell__content");
+    const counterButton = content.getByRole("button").first();
+    await counterButton.click();
+    const stateBeforeAccount = await content.innerText();
+
+    for (const label of ["个人资料", "设置中心", "插件市场", "切换租户"]) {
+      await openAccountPage(page, label, mobile);
+      await page.locator(".application-fullscreen__content h2").first().waitFor();
+      if (label === "设置中心") {
+        await page.screenshot({ path: path.join(screenshotDir, `aio-account-fullscreen-${mobile ? "mobile" : "desktop"}.png`), fullPage: true });
+      }
+      await returnToWorkspace(page);
+      assert.equal(await content.innerText(), stateBeforeAccount, "返回必须保留原页面状态");
+      assert.equal(await sceneTabs.getByRole("button", { name: "社区插件", exact: true }).getAttribute("aria-pressed"), "true");
+    }
+    await page.screenshot({ path: path.join(screenshotDir, `aio-scene-root-${mobile ? "mobile" : "desktop"}.png`), fullPage: true });
+    await assertFits(page);
+    assert.deepEqual(errors, []);
+    return { viewport: mobile ? "mobile" : "desktop", sceneFiltering: true, fullscreenAccount: true, preservedPageState: true, errors };
+  } finally {
+    await context.close();
+  }
+}
+
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    console.log(JSON.stringify([await scenario(browser, false), await scenario(browser, true)], null, 2));
+  } finally {
+    await browser.close();
+  }
+})().catch((error) => { console.error(error); process.exitCode = 1; });
