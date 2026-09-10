@@ -46,17 +46,25 @@ fn App() -> dioxus::prelude::Element {
         Ok::<_, String>((session, catalog))
     });
     let Some(application_result) = application.read().as_ref().cloned() else {
-        return rsx! { p { "正在验证会话" } };
+        return standalone_page(rsx! { p { "正在验证会话" } });
     };
     let (session, catalog) = match application_result {
         Ok((Some(session), Some(catalog))) => (session, catalog),
-        Ok((None, _)) => return rsx! { aio_plugin_identity_client::LoginPage {} },
-        Ok((Some(_), None)) => return rsx! { p { role: "alert", "插件目录没有返回数据" } },
-        Err(error) => return rsx! { p { role: "alert", "验证会话失败: {error}" } },
+        Ok((None, _)) => {
+            return standalone_page(rsx! { aio_plugin_identity_client::LoginPage {} });
+        }
+        Ok((Some(_), None)) => {
+            return standalone_page(rsx! { p { role: "alert", "插件目录没有返回数据" } });
+        }
+        Err(error) => {
+            return standalone_page(rsx! { p { role: "alert", "验证会话失败: {error}" } });
+        }
     };
     let mut static_plugins = match plugins::client_catalog() {
         Ok(value) => value,
-        Err(error) => return rsx! { p { "加载应用页面失败: {error}" } },
+        Err(error) => {
+            return standalone_page(rsx! { p { role: "alert", "加载应用页面失败: {error}" } });
+        }
     };
     static_plugins.pages.retain(|page| {
         page.required_permission
@@ -118,5 +126,15 @@ fn App() -> dioxus::prelude::Element {
                 initials: catalog.user.initials,
             },
         }
+    }
+}
+
+#[cfg(any(feature = "web", feature = "desktop"))]
+fn standalone_page(content: dioxus::prelude::Element) -> dioxus::prelude::Element {
+    use dioxus::prelude::*;
+
+    rsx! {
+        az_ui_components::UiStylesheets {}
+        {content}
     }
 }
