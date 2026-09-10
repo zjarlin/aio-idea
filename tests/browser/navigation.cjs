@@ -54,6 +54,14 @@ async function returnToWorkspace(page) {
 
 async function scenario(browser, mobile) {
   const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, isMobile: mobile });
+  // 只在测试响应中加入社区账户页，验证通用挂载契约，不修改租户数据。
+  await context.route("**/api/runtime/catalog", async (route) => {
+    const response = await route.fetch();
+    const catalog = await response.json();
+    catalog.data.pages.push({ id: "account-extension-test", label: "社区账户扩展", icon: null, scene: { id: "community", label: "社区插件" }, required_permission: null, body: { kind: "counter", title: "社区账户扩展", button: "扩展 +1" } });
+    catalog.data.account_items.push({ id: "open-account-extension-test", label: "社区账户扩展", icon: null, page_id: "account-extension-test", required_permission: null });
+    await route.fulfill({ response, json: catalog });
+  });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -65,7 +73,7 @@ async function scenario(browser, mobile) {
     const menus = async () => sidebar.locator(".application-shell__navigation-button").allTextContents();
     assert.deepEqual((await menus()).map((text) => text.trim()), ["首页", "Hello"]);
     assert.equal(await sidebar.locator(".application-shell__navigation-heading").count(), 0);
-    for (const label of ["个人资料", "设置中心", "插件市场", "租户管理"]) {
+    for (const label of ["个人资料", "设置中心", "插件市场", "租户管理", "社区账户扩展"]) {
       assert.equal(await sidebar.getByRole("button", { name: label, exact: true }).count(), 0);
     }
 
@@ -83,11 +91,15 @@ async function scenario(browser, mobile) {
     await counterButton.click();
     const stateBeforeAccount = await content.innerText();
 
-    for (const label of ["个人资料", "设置中心", "插件市场", "切换租户"]) {
+    for (const label of ["个人资料", "设置中心", "插件市场", "切换租户", "社区账户扩展"]) {
       await openAccountPage(page, label, mobile);
       await page.locator(".application-fullscreen__content h2").first().waitFor();
       await page.waitForFunction(() => !document.querySelector(".application-fullscreen__content").innerText.includes("正在读取"));
       assert.equal(await page.locator('.application-fullscreen__content [role="alert"]').count(), 0);
+      if (label === "社区账户扩展") {
+        await page.getByRole("button", { name: "扩展 +1", exact: true }).click();
+        await page.locator(".application-fullscreen__content").getByText("计数：1", { exact: true }).waitFor();
+      }
       if (label === "设置中心") {
         await page.screenshot({ path: path.join(screenshotDir, `aio-account-fullscreen-${mobile ? "mobile" : "desktop"}.png`), fullPage: true });
       }
@@ -98,7 +110,7 @@ async function scenario(browser, mobile) {
     await page.screenshot({ path: path.join(screenshotDir, `aio-scene-root-${mobile ? "mobile" : "desktop"}.png`), fullPage: true });
     await assertFits(page);
     assert.deepEqual(errors, []);
-    return { viewport: mobile ? "mobile" : "desktop", sceneFiltering: true, fullscreenAccount: true, preservedPageState: true, errors };
+    return { viewport: mobile ? "mobile" : "desktop", sceneFiltering: true, fullscreenAccount: true, runtimeAccountFixture: true, preservedPageState: true, errors };
   } finally {
     await context.close();
   }
