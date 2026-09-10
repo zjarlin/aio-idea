@@ -8,7 +8,7 @@ use super::{
     },
     repository::DiscoveredPlugin,
 };
-use crate::runtime::PluginRuntime;
+use crate::runtime::{MarketplaceEntry, PluginRuntime};
 
 pub(super) struct ActivatedPlugin {
     pub source_id: String,
@@ -21,10 +21,13 @@ pub(super) async fn activate(
     tenant_id: &str,
     mut discovered: DiscoveredPlugin,
     validation_detail: &str,
+    publication: Option<&MarketplaceEntry>,
 ) -> Result<ActivatedPlugin> {
     if let Some(source_id) = state.store.source_id(&discovered.git).await? {
         discovered.source_id = source_id;
     }
+    let activation_lock = state.activation_lock(tenant_id, &discovered.source_id)?;
+    let _activation_guard = activation_lock.lock().await;
     let current_revision = discovered.revision.clone();
     state
         .store
@@ -64,8 +67,8 @@ pub(super) async fn activate(
     } else {
         None
     };
-    if instance.is_some() || wasm.is_some() {
-        state
+    if (instance.is_some() || wasm.is_some())
+        && let Err(error) = state
             .store
             .record_lifecycle_event(
                 tenant_id,
@@ -74,7 +77,17 @@ pub(super) async fn activate(
                 "health-check",
                 "运行时健康检查通过",
             )
-            .await?;
+            .await
+    {
+        let _ = cleanup_new_process(state, instance.as_ref()).await;
+        let _ = cleanup_new_wasm(
+            state,
+            tenant_id,
+            &discovered.source_id,
+            &current_revision,
+            wasm.as_ref(),
+        );
+        return Err(error);
     }
     let activated = ActivatedPlugin {
         source_id: discovered.source_id.clone(),
@@ -94,7 +107,7 @@ pub(super) async fn activate(
     }
     if let Err(error) = state
         .store
-        .activate(tenant_id, discovered, instance.as_ref())
+        .activate(tenant_id, discovered, instance.as_ref(), publication)
         .await
     {
         let _ = cleanup_new_process(state, instance.as_ref()).await;

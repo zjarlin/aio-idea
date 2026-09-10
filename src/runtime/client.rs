@@ -21,7 +21,8 @@ pub async fn catalog() -> Result<RuntimeCatalog, String> {
 }
 
 pub fn render_page(page: ApplicationRuntimePage) -> Element {
-    rsx! { RuntimePage { page } }
+    let page_key = page.id.clone();
+    rsx! { RuntimePage { key: "{page_key}", page } }
 }
 
 #[component]

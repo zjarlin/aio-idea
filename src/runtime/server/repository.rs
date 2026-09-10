@@ -8,21 +8,33 @@ use std::{
 
 use anyhow::{Context as _, Result, ensure};
 use az_plugin_manifest::{
-    artifact_path, parse_manifest, read_manifest, validate_declared_pages,
-    validate_host_compatibility, validate_page_definitions, validate_repository,
+    artifact_path, read_manifest, validate_declared_pages, validate_host_compatibility,
+    validate_page_definitions, validate_repository,
 };
-use base64::Engine as _;
 use flate2::read::GzDecoder;
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use tar::Archive;
 use tokio::process::Command;
 
+use super::publication_validation::{
+    ValidatedPublication, ensure_publish_capabilities, ensure_publish_runtime,
+    validate_publish_payload,
+};
+#[cfg(test)]
+use super::remote_access::is_public_ip;
+use super::remote_access::{
+    RemoteResolution, git_timeout, validate_git, validate_public_remote, validate_registry_source,
+};
 use crate::runtime::{MarketplaceEntry, PageDefinition, PluginRuntime, PublishPluginRequest};
 
 const MAX_ARCHIVE_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_PUBLISHED_ARTIFACT_BYTES: usize = 32 * 1024 * 1024;
-const MAX_PUBLISHED_MANIFEST_BYTES: usize = 128 * 1024;
+const MAX_ARCHIVE_EXPANDED_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+const DEFAULT_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
+const DEFAULT_CACHE_ENTRIES: usize = 100_000;
+const DEFAULT_CACHE_REVISIONS: usize = 512;
+const MAX_REGISTRY_BYTES: usize = 2 * 1024 * 1024;
 const REGISTRY_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub struct DiscoveredPlugin {
@@ -36,16 +48,22 @@ pub struct DiscoveredPlugin {
 }
 
 pub struct RepositoryInstaller {
-    cache_root: PathBuf,
+    pub(super) cache_root: PathBuf,
+    cache_operations: tokio::sync::Mutex<()>,
 }
 
 impl RepositoryInstaller {
     pub fn new(cache_root: PathBuf) -> Self {
-        Self { cache_root }
+        Self {
+            cache_root,
+            cache_operations: tokio::sync::Mutex::new(()),
+        }
     }
 
     pub async fn discover(&self, git: &str, revision: Option<&str>) -> Result<DiscoveredPlugin> {
         validate_git(git)?;
+        let remote = validate_public_remote(git).await?;
+        let _cache_guard = self.cache_operations.lock().await;
         tokio::fs::create_dir_all(&self.cache_root)
             .await
             .context("创建插件缓存目录失败")?;
@@ -53,26 +71,8 @@ impl RepositoryInstaller {
             .cache_root
             .join(format!("staging-{}", uuid::Uuid::new_v4()));
         let result = async {
-            let archive = github_archive(git, revision)?;
-            let (checkout_root, resolved) = if let Some((archive, resolved)) = archive {
-                (download_archive(archive, &staging).await?, resolved)
-            } else {
-                run_git(
-                    None,
-                    &[
-                        "clone",
-                        "--quiet",
-                        "--no-checkout",
-                        git,
-                        staging.to_str().context("插件缓存路径不是 Unicode")?,
-                    ],
-                )
-                .await?;
-                let checkout = revision.unwrap_or("HEAD");
-                run_git(Some(&staging), &["checkout", "--quiet", checkout]).await?;
-                let resolved = git_output(&staging, &["rev-parse", "HEAD"]).await?;
-                (staging.clone(), resolved)
-            };
+            let (checkout_root, resolved) =
+                checkout_revision(git, revision, &staging, Some(&remote)).await?;
             ensure!(
                 resolved.len() == 40 && resolved.bytes().all(|byte| byte.is_ascii_hexdigit()),
                 "Git 未解析出完整提交 SHA"
@@ -119,12 +119,13 @@ impl RepositoryInstaller {
             if final_directory.exists() {
                 tokio::fs::remove_dir_all(&staging).await?;
             } else {
+                self.ensure_cache_quota(true).await?;
                 tokio::fs::rename(&checkout_root, &final_directory)
                     .await
                     .context("原子发布插件缓存失败")?;
             }
             Ok(DiscoveredPlugin {
-                source_id: uuid::Uuid::new_v4().to_string(),
+                source_id: published_source_id(git),
                 git: git.to_owned(),
                 revision: resolved,
                 runtime: runtime_kind,
@@ -139,49 +140,28 @@ impl RepositoryInstaller {
 
     #[cfg(test)]
     pub async fn publish(&self, request: &PublishPluginRequest) -> Result<DiscoveredPlugin> {
-        let staged = self.stage_publish(request).await?;
+        let publication = validate_publish_payload(request)?;
+        let staged = self.persist_verified_publish(request, publication).await?;
         self.validate_published(&staged.git, &staged.revision).await
     }
 
     pub async fn stage_publish(&self, request: &PublishPluginRequest) -> Result<DiscoveredPlugin> {
-        validate_git(&request.git)?;
-        ensure!(
-            is_full_revision(&request.rev),
-            "发布插件必须使用完整提交 SHA"
-        );
-        ensure!(
-            request.manifest_toml.len() <= MAX_PUBLISHED_MANIFEST_BYTES,
-            "发布插件清单不能超过 {MAX_PUBLISHED_MANIFEST_BYTES} 字节"
-        );
-        ensure!(
-            request.artifact_sha256.len() == 64
-                && request
-                    .artifact_sha256
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit()),
-            "artifact_sha256 必须是完整 SHA-256"
-        );
-        let artifact_bytes = base64::engine::general_purpose::STANDARD
-            .decode(&request.artifact_base64)
-            .context("发布 artifact 不是有效 Base64")?;
-        ensure!(
-            artifact_bytes.len() <= MAX_PUBLISHED_ARTIFACT_BYTES,
-            "发布 artifact 不能超过 {MAX_PUBLISHED_ARTIFACT_BYTES} 字节"
-        );
-        let actual_digest = format!("{:x}", Sha256::digest(&artifact_bytes));
-        ensure!(
-            actual_digest.eq_ignore_ascii_case(&request.artifact_sha256),
-            "发布 artifact SHA-256 不匹配"
-        );
-        let manifest = parse_manifest(&request.manifest_toml)?;
-        validate_host_compatibility(&manifest, env!("CARGO_PKG_VERSION"))?;
-        let runtime = manifest
+        let publication = validate_publish_payload(request)?;
+        let _cache_guard = self.cache_operations.lock().await;
+        self.persist_verified_publish(request, publication).await
+    }
+
+    async fn persist_verified_publish(
+        &self,
+        request: &PublishPluginRequest,
+        publication: ValidatedPublication,
+    ) -> Result<DiscoveredPlugin> {
+        let runtime = publication
+            .manifest
             .plugin
             .runtime
             .as_ref()
             .context("发布插件缺少 plugin.runtime")?;
-        ensure_publish_runtime(runtime.kind)?;
-        ensure_publish_capabilities(&manifest)?;
         tokio::fs::create_dir_all(&self.cache_root)
             .await
             .context("创建插件缓存目录失败")?;
@@ -196,12 +176,12 @@ impl RepositoryInstaller {
                 .parent()
                 .context("发布 artifact 缺少父目录")?;
             tokio::fs::create_dir_all(parent).await?;
-            tokio::fs::write(&artifact_target, &artifact_bytes).await?;
+            tokio::fs::write(&artifact_target, &publication.artifact).await?;
             let final_directory = self.cache_root.join(&request.rev);
             if final_directory.exists() {
                 let existing_manifest = read_manifest(&final_directory)?;
                 ensure!(
-                    existing_manifest == manifest,
+                    existing_manifest == publication.manifest,
                     "同一提交 SHA 已存在不同的发布清单"
                 );
                 let existing_artifact = artifact_path(&final_directory, &runtime.artifact)?;
@@ -212,6 +192,7 @@ impl RepositoryInstaller {
                     "同一提交 SHA 已存在不同的发布 artifact"
                 );
             } else {
+                self.ensure_cache_quota(true).await?;
                 tokio::fs::rename(&staging, &final_directory)
                     .await
                     .context("原子发布 artifact 缓存失败")?;
@@ -226,14 +207,14 @@ impl RepositoryInstaller {
             };
             if runtime.kind == PluginRuntime::PageDefinition {
                 validate_page_definitions(&pages)?;
-                validate_declared_pages(&manifest, &pages)?;
+                validate_declared_pages(&publication.manifest, &pages)?;
             }
             Ok(DiscoveredPlugin {
                 source_id: published_source_id(&request.git),
                 git: request.git.clone(),
                 revision: request.rev.clone(),
                 runtime: runtime.kind,
-                manifest: serde_json::to_value(&manifest.plugin)?,
+                manifest: serde_json::to_value(&publication.manifest.plugin)?,
                 pages,
                 artifact: runtime.artifact.clone(),
             })
@@ -280,47 +261,57 @@ impl RepositoryInstaller {
 
     pub async fn registry(&self, source: &str) -> Result<Vec<MarketplaceEntry>> {
         if !source.ends_with(".git") {
-            ensure!(source.starts_with("https://"), "市场索引必须使用 HTTPS");
+            validate_registry_source(source)?;
+            let remote = validate_public_remote(source).await?;
             let client = reqwest::Client::builder()
                 .connect_timeout(REGISTRY_TIMEOUT)
                 .timeout(REGISTRY_TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
+                .resolve(&remote.host, remote.socket)
                 .build()
                 .context("创建市场索引 HTTP 客户端失败")?;
-            return client
+            let mut response = client
                 .get(source)
                 .send()
                 .await
                 .context("请求市场索引失败")?
                 .error_for_status()
-                .context("市场索引返回失败状态")?
-                .json()
-                .await
-                .context("解析市场索引失败");
+                .context("市场索引返回失败状态")?;
+            ensure!(
+                response
+                    .content_length()
+                    .is_none_or(|length| length <= MAX_REGISTRY_BYTES as u64),
+                "市场索引超过 2 MiB 配额"
+            );
+            let mut content = Vec::new();
+            while let Some(chunk) = response.chunk().await.context("读取市场索引失败")? {
+                ensure!(
+                    content.len().saturating_add(chunk.len()) <= MAX_REGISTRY_BYTES,
+                    "市场索引超过 2 MiB 配额"
+                );
+                content.extend_from_slice(&chunk);
+            }
+            return serde_json::from_slice(&content).context("解析市场索引失败");
         }
         validate_git(source)?;
+        let remote = validate_public_remote(source).await?;
+        let _cache_guard = self.cache_operations.lock().await;
         tokio::fs::create_dir_all(&self.cache_root).await?;
         let checkout = self
             .cache_root
             .join(format!("registry-{}", uuid::Uuid::new_v4()));
         let result = async {
-            run_git(
-                None,
-                &[
-                    "clone",
-                    "--quiet",
-                    "--depth",
-                    "1",
-                    source,
-                    checkout.to_str().context("市场缓存路径不是 Unicode")?,
-                ],
-            )
-            .await?;
+            checkout_revision(source, None, &checkout, Some(&remote)).await?;
             let primary = checkout.join("marketplace/index.json");
             let path = if primary.is_file() {
                 primary
             } else {
                 checkout.join("index.json")
             };
+            ensure!(
+                tokio::fs::metadata(&path).await?.len() <= MAX_REGISTRY_BYTES as u64,
+                "Git 市场索引超过 2 MiB 配额"
+            );
             serde_json::from_slice(
                 &tokio::fs::read(&path)
                     .await
@@ -349,6 +340,77 @@ impl RepositoryInstaller {
         validate_page_definitions(pages)?;
         validate_declared_pages(&manifest, pages)
     }
+
+    async fn ensure_cache_quota(&self, adds_revision: bool) -> Result<()> {
+        let root = self.cache_root.clone();
+        let byte_limit = environment_limit("AIO_PLUGIN_CACHE_MAX_BYTES", DEFAULT_CACHE_BYTES);
+        let revision_limit = environment_limit(
+            "AIO_PLUGIN_CACHE_MAX_REVISIONS",
+            DEFAULT_CACHE_REVISIONS as u64,
+        );
+        let revision_limit = usize::try_from(revision_limit).unwrap_or(usize::MAX);
+        let entry_limit =
+            environment_limit("AIO_PLUGIN_CACHE_MAX_ENTRIES", DEFAULT_CACHE_ENTRIES as u64);
+        let entry_limit = usize::try_from(entry_limit).unwrap_or(usize::MAX);
+        tokio::task::spawn_blocking(move || {
+            validate_cache_quota(
+                &root,
+                byte_limit,
+                revision_limit,
+                entry_limit,
+                adds_revision,
+            )
+        })
+        .await
+        .context("等待插件缓存配额校验失败")?
+    }
+}
+
+fn environment_limit(name: &str, default: u64) -> u64 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn validate_cache_quota(
+    root: &Path,
+    byte_limit: u64,
+    revision_limit: usize,
+    entry_limit: usize,
+    adds_revision: bool,
+) -> Result<()> {
+    let mut directories = vec![root.to_owned()];
+    let mut bytes = 0_u64;
+    let mut entries = 0_usize;
+    let revisions = std::fs::read_dir(root)?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && entry.file_name().to_str().is_some_and(is_full_revision)
+        })
+        .count();
+    ensure!(
+        revisions.saturating_add(usize::from(adds_revision)) <= revision_limit,
+        "插件缓存版本数量超过配额"
+    );
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let metadata = std::fs::symlink_metadata(entry.path())?;
+            entries = entries.checked_add(1).context("插件缓存条目数溢出")?;
+            ensure!(entries <= entry_limit, "插件缓存条目数超过配额");
+            bytes = bytes
+                .checked_add(metadata.len())
+                .context("插件缓存大小溢出")?;
+            ensure!(bytes <= byte_limit, "插件缓存总大小超过配额");
+            if metadata.is_dir() {
+                directories.push(entry.path());
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn finish_with_cleanup<T>(result: Result<T>, directory: &Path) -> Result<T> {
@@ -407,38 +469,122 @@ fn github_archive(git: &str, revision: Option<&str>) -> Result<Option<(reqwest::
     Ok(Some((archive, revision.to_owned())))
 }
 
-fn is_full_revision(revision: &str) -> bool {
+pub(super) fn is_full_revision(revision: &str) -> bool {
     revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn published_source_id(git: &str) -> String {
-    format!("publish-{:x}", Sha256::digest(git.as_bytes()))
+pub(super) fn published_source_id(git: &str) -> String {
+    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, git.as_bytes()).to_string()
 }
 
-fn ensure_publish_runtime(runtime: PluginRuntime) -> Result<()> {
-    ensure!(
-        matches!(
-            runtime,
-            PluginRuntime::PageDefinition | PluginRuntime::WasmComponent | PluginRuntime::Process
-        ),
-        "发布接口只接受 page-definition、wasm-component 或 process artifact"
-    );
-    Ok(())
+async fn checkout_revision(
+    git: &str,
+    revision: Option<&str>,
+    staging: &Path,
+    remote: Option<&RemoteResolution>,
+) -> Result<(PathBuf, String)> {
+    if let Some((_, requested)) = github_archive(git, revision)? {
+        let remote = remote.context("GitHub 提交解析缺少固定公网地址")?;
+        let resolved = resolve_remote_revision(git, &requested, staging, remote).await?;
+        ensure!(
+            resolved.eq_ignore_ascii_case(&requested),
+            "GitHub ref 没有解析为请求中的完整提交 SHA"
+        );
+        let (archive, _) =
+            github_archive(git, Some(&resolved))?.context("无法构造已解析 GitHub 提交归档")?;
+        return Ok((download_archive(archive, staging).await?, resolved));
+    }
+    tokio::fs::create_dir_all(staging).await?;
+    run_git(
+        None,
+        &[
+            "init",
+            "--quiet",
+            staging.to_str().context("插件缓存路径不是 Unicode")?,
+        ],
+    )
+    .await?;
+    let checkout = revision.unwrap_or("HEAD");
+    let pin = remote.map(RemoteResolution::git_configuration);
+    let mut fetch = vec!["-c", "http.followRedirects=false"];
+    if let Some(pin) = pin.as_deref() {
+        fetch.extend(["-c", pin]);
+    }
+    fetch.extend(["fetch", "--quiet", "--depth", "1", git, checkout]);
+    run_git_bounded(Some(staging), &fetch, staging).await?;
+    run_git_bounded(
+        Some(staging),
+        &["checkout", "--quiet", "FETCH_HEAD"],
+        staging,
+    )
+    .await?;
+    let resolved = git_output(staging, &["rev-parse", "HEAD"]).await?;
+    if revision.is_some_and(is_full_revision) {
+        ensure!(
+            revision.is_some_and(|requested| resolved.eq_ignore_ascii_case(requested)),
+            "Git ref 没有解析为请求中的完整提交 SHA"
+        );
+    }
+    tokio::fs::remove_dir_all(staging.join(".git")).await?;
+    validate_directory_quota(staging).await?;
+    Ok((staging.to_owned(), resolved))
 }
 
-fn ensure_publish_capabilities(manifest: &az_plugin_manifest::RepositoryManifest) -> Result<()> {
-    let capabilities = &manifest.plugin.capabilities;
-    ensure!(
-        capabilities.network.is_empty()
-            && capabilities.filesystem.is_empty()
-            && !capabilities.database,
-        "当前在线发布宿主未授予网络、文件系统或数据库能力"
-    );
-    Ok(())
+async fn resolve_remote_revision(
+    git: &str,
+    revision: &str,
+    staging: &Path,
+    remote: &RemoteResolution,
+) -> Result<String> {
+    let repository = staging.join(".revision.git");
+    tokio::fs::create_dir_all(staging).await?;
+    run_git(
+        None,
+        &[
+            "init",
+            "--quiet",
+            "--bare",
+            repository
+                .to_str()
+                .context("插件提交解析路径不是 Unicode")?,
+        ],
+    )
+    .await?;
+    let pin = remote.git_configuration();
+    run_git_bounded(
+        Some(&repository),
+        &[
+            "-c",
+            "http.followRedirects=false",
+            "-c",
+            &pin,
+            "fetch",
+            "--quiet",
+            "--depth",
+            "1",
+            git,
+            revision,
+        ],
+        &repository,
+    )
+    .await?;
+    let resolved = git_output(&repository, &["rev-parse", "FETCH_HEAD"]).await?;
+    tokio::fs::remove_dir_all(repository).await?;
+    Ok(resolved)
 }
 
 async fn download_archive(source: reqwest::Url, staging: &Path) -> Result<PathBuf> {
-    let response = reqwest::get(source)
+    let remote = validate_public_remote(source.as_str()).await?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(git_timeout())
+        .timeout(git_timeout())
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve(&remote.host, remote.socket)
+        .build()
+        .context("创建 GitHub 提交归档客户端失败")?;
+    let mut response = client
+        .get(source)
+        .send()
         .await
         .context("下载 GitHub 提交归档失败")?
         .error_for_status()
@@ -449,21 +595,19 @@ async fn download_archive(source: reqwest::Url, staging: &Path) -> Result<PathBu
             .is_none_or(|length| length <= MAX_ARCHIVE_BYTES),
         "GitHub 提交归档超过 32 MiB 配额"
     );
-    let content = response.bytes().await.context("读取 GitHub 提交归档失败")?;
-    ensure!(
-        content.len() as u64 <= MAX_ARCHIVE_BYTES,
-        "GitHub 提交归档超过 32 MiB 配额"
-    );
+    let mut content = Vec::new();
+    while let Some(chunk) = response.chunk().await.context("读取 GitHub 提交归档失败")? {
+        ensure!(
+            content.len().saturating_add(chunk.len()) <= MAX_ARCHIVE_BYTES as usize,
+            "GitHub 提交归档超过 32 MiB 配额"
+        );
+        content.extend_from_slice(&chunk);
+    }
     let staging = staging.to_owned();
     let extraction = staging.clone();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let decoder = GzDecoder::new(Cursor::new(content));
-        Archive::new(decoder)
-            .unpack(&extraction)
-            .context("解压 GitHub 提交归档失败")
-    })
-    .await
-    .context("等待 GitHub 提交归档解压失败")??;
+    tokio::task::spawn_blocking(move || extract_archive(content, &extraction))
+        .await
+        .context("等待 GitHub 提交归档解压失败")??;
     let mut entries = tokio::fs::read_dir(&staging)
         .await
         .context("读取 GitHub 提交归档目录失败")?;
@@ -479,16 +623,66 @@ async fn download_archive(source: reqwest::Url, staging: &Path) -> Result<PathBu
     Ok(root.path())
 }
 
-pub(super) fn validate_git(git: &str) -> Result<()> {
-    ensure!(
-        git.starts_with("https://") && git.ends_with(".git"),
-        "插件来源必须是 HTTPS Git 仓库"
-    );
-    ensure!(
-        !git.contains(char::is_whitespace),
-        "插件 Git 地址不能包含空白字符"
-    );
+fn extract_archive(content: Vec<u8>, destination: &Path) -> Result<()> {
+    let decoder = GzDecoder::new(Cursor::new(content));
+    let mut archive = Archive::new(decoder);
+    let mut expanded_bytes = 0_u64;
+    for (index, entry) in archive.entries()?.enumerate() {
+        ensure!(index < MAX_ARCHIVE_ENTRIES, "GitHub 提交归档条目数超过配额");
+        let mut entry = entry.context("读取 GitHub 提交归档条目失败")?;
+        expanded_bytes = expanded_bytes
+            .checked_add(entry.header().size()?)
+            .context("GitHub 提交归档展开大小溢出")?;
+        ensure!(
+            expanded_bytes <= MAX_ARCHIVE_EXPANDED_BYTES,
+            "GitHub 提交归档展开后超过 64 MiB 配额"
+        );
+        ensure!(
+            entry.unpack_in(destination)?,
+            "GitHub 提交归档包含目标目录外路径"
+        );
+    }
     Ok(())
+}
+
+async fn validate_directory_quota(root: &Path) -> Result<()> {
+    let root = root.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let mut directories = vec![root];
+        let mut entries = 0_usize;
+        let mut bytes = 0_u64;
+        while let Some(directory) = directories.pop() {
+            let directory_entries = match std::fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            for entry in directory_entries {
+                let entry = entry?;
+                let metadata = match std::fs::symlink_metadata(entry.path()) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                entries = entries.checked_add(1).context("Git 检出条目数溢出")?;
+                ensure!(entries <= MAX_ARCHIVE_ENTRIES, "Git 检出条目数超过配额");
+                if metadata.is_dir() {
+                    directories.push(entry.path());
+                } else {
+                    bytes = bytes
+                        .checked_add(metadata.len())
+                        .context("Git 检出大小溢出")?;
+                    ensure!(
+                        bytes <= MAX_ARCHIVE_EXPANDED_BYTES,
+                        "Git 检出内容超过 64 MiB 配额"
+                    );
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("等待 Git 检出配额校验失败")?
 }
 
 async fn run_git(directory: Option<&Path>, arguments: &[&str]) -> Result<()> {
@@ -512,6 +706,51 @@ async fn run_git(directory: Option<&Path>, arguments: &[&str]) -> Result<()> {
     Ok(())
 }
 
+async fn run_git_bounded(
+    directory: Option<&Path>,
+    arguments: &[&str],
+    quota_root: &Path,
+) -> Result<()> {
+    let mut command = Command::new("git");
+    command
+        .args(arguments)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .kill_on_drop(true)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+    let mut child = command.spawn().context("启动受限 Git 操作失败")?;
+    let deadline = tokio::time::sleep(git_timeout());
+    tokio::pin!(deadline);
+    let mut quota_check = tokio::time::interval(Duration::from_millis(50));
+    quota_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            status = child.wait() => {
+                ensure!(status?.success(), "受限 Git 操作失败");
+                validate_directory_quota(quota_root).await?;
+                return Ok(());
+            }
+            _ = quota_check.tick() => {
+                if let Err(error) = validate_directory_quota(quota_root).await {
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    return Err(error);
+                }
+            }
+            _ = &mut deadline => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                anyhow::bail!("受限 Git 操作超时");
+            }
+        }
+    }
+}
+
 async fn git_output(directory: &Path, arguments: &[&str]) -> Result<String> {
     let mut command = Command::new("git");
     command
@@ -529,161 +768,6 @@ async fn git_output(directory: &Path, arguments: &[&str]) -> Result<String> {
     Ok(String::from_utf8(output.stdout)?.trim().to_owned())
 }
 
-fn git_timeout() -> Duration {
-    env::var("AIO_GIT_TIMEOUT_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|seconds| *seconds > 0)
-        .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(30))
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn builds_github_archive_for_full_revision() -> Result<()> {
-        let revision = "0123456789012345678901234567890123456789";
-        let (archive, resolved) =
-            github_archive("https://github.com/example/aio-plugin.git", Some(revision))?
-                .context("应生成 GitHub 归档")?;
-
-        assert_eq!(resolved, revision);
-        assert_eq!(
-            archive.as_str(),
-            "https://codeload.github.com/example/aio-plugin/tar.gz/0123456789012345678901234567890123456789"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn keeps_git_for_non_github_or_symbolic_revision() -> Result<()> {
-        assert!(
-            github_archive(
-                "https://git.example.com/plugin.git",
-                Some("0".repeat(40).as_str())
-            )?
-            .is_none()
-        );
-        assert!(github_archive("https://github.com/example/plugin.git", Some("main"))?.is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn rejects_capabilities_not_granted_to_online_publications() -> Result<()> {
-        let manifest = parse_manifest(
-            "[plugin.runtime]\nkind = 'process'\nartifact = 'plugin.js'\ncontainer_image = 'node:22@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3'\nentrypoint = ['node', '{artifact}']\nhealth_check = '/health'\n\n[plugin.capabilities]\ndatabase = true\n",
-        )?;
-
-        let error = ensure_publish_capabilities(&manifest)
-            .expect_err("未授权的数据库能力必须在暂存前被拒绝");
-
-        assert!(error.to_string().contains("未授予"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn publishes_validated_page_definition_artifact() -> Result<()> {
-        let artifact = br#"[{"id":"published-page","label":"Published","icon":"box","scene":{"id":"community","label":"Community"},"required_permission":null,"body":{"kind":"text","title":"Published","content":"from CI"}}]"#;
-        let request = PublishPluginRequest {
-            git: "https://github.com/example/aio-plugin-published.git".to_owned(),
-            rev: "a".repeat(40),
-            manifest_toml: r#"
-[plugin.runtime]
-kind = "page-definition"
-artifact = "dist/pages.json"
-
-[plugin.capabilities]
-network = []
-filesystem = []
-database = false
-
-[[plugin.subplugins]]
-id = "published"
-pages = ["published-page"]
-"#
-            .to_owned(),
-            artifact_base64: base64::engine::general_purpose::STANDARD.encode(artifact),
-            artifact_sha256: format!("{:x}", Sha256::digest(artifact)),
-            tenant_id: None,
-        };
-        let temporary = tempfile::tempdir()?;
-        let installer = RepositoryInstaller::new(temporary.path().join("cache"));
-
-        let published = installer.publish(&request).await?;
-
-        assert_eq!(published.runtime, PluginRuntime::PageDefinition);
-        assert_eq!(published.pages.len(), 1);
-        assert!(
-            installer
-                .artifact(&request.rev, "dist/pages.json")?
-                .is_file()
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn publishes_validated_process_artifact() -> Result<()> {
-        let artifact = b"committed process artifact";
-        let request = PublishPluginRequest {
-            git: "https://github.com/example/aio-plugin-process.git".to_owned(),
-            rev: "c".repeat(40),
-            manifest_toml: r#"
-[plugin.runtime]
-kind = "process"
-artifact = "dist/plugin.jar"
-host_version = ">=2026.9.9"
-container_image = "eclipse-temurin:21-jre@sha256:5c67d24ee8e3dd810b2a0cb6c3827ced2ac5d22729538f90b36c2b9d77678bb8"
-entrypoint = ["java", "-jar", "{artifact}"]
-health_check = "/health"
-shutdown_timeout_seconds = 10
-
-[plugin.capabilities]
-network = []
-filesystem = []
-database = false
-"#
-            .to_owned(),
-            artifact_base64: base64::engine::general_purpose::STANDARD.encode(artifact),
-            artifact_sha256: format!("{:x}", Sha256::digest(artifact)),
-            tenant_id: None,
-        };
-        let temporary = tempfile::tempdir()?;
-        let installer = RepositoryInstaller::new(temporary.path().join("cache"));
-
-        let published = installer.publish(&request).await?;
-
-        assert_eq!(published.runtime, PluginRuntime::Process);
-        assert!(published.pages.is_empty());
-        assert!(
-            installer
-                .artifact(&request.rev, "dist/plugin.jar")?
-                .is_file()
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn rejects_published_artifact_with_mismatched_digest() -> Result<()> {
-        let request = PublishPluginRequest {
-            git: "https://github.com/example/aio-plugin-published.git".to_owned(),
-            rev: "b".repeat(40),
-            manifest_toml: "[plugin.runtime]\nkind = 'page-definition'\nartifact = 'pages.json'"
-                .to_owned(),
-            artifact_base64: base64::engine::general_purpose::STANDARD.encode(b"[]"),
-            artifact_sha256: "0".repeat(64),
-            tenant_id: None,
-        };
-        let temporary = tempfile::tempdir()?;
-        let installer = RepositoryInstaller::new(temporary.path().join("cache"));
-
-        let error = match installer.publish(&request).await {
-            Ok(_) => panic!("摘要错误的 artifact 不能发布"),
-            Err(error) => error,
-        };
-
-        assert!(error.to_string().contains("SHA-256 不匹配"));
-        Ok(())
-    }
-}
+#[path = "repository_tests.rs"]
+mod tests;

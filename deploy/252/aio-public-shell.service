@@ -14,9 +14,13 @@ Environment=AIO_WEB_PORT=3080
 Environment=AIO_WEB_DIST=/opt/aio-public-shell/current/web
 Environment=AIO_CONFIG=/opt/aio-public-shell/current/aio.toml
 Environment=AIO_PLUGIN_CACHE=/opt/aio-public-shell/plugin-cache
+Environment=AIO_PLUGIN_CACHE_MAX_BYTES=1073741824
+Environment=AIO_PLUGIN_CACHE_MAX_ENTRIES=100000
+Environment=AIO_PLUGIN_CACHE_MAX_REVISIONS=512
 Environment=AIO_PLUGIN_SUPERVISOR_SOCKET=/run/aio-plugin-supervisor/supervisor.sock
 Environment=AIO_SESSION_SECURE=1
 Environment=AIO_PASSWORD_MIN_LENGTH=8
+Environment=AIO_PLUGIN_PUBLISH_ACCOUNTS=zjarlin
 ExecStart=/opt/aio-public-shell/current/aio-public-shell
 TimeoutStartSec=300
 Restart=on-failure

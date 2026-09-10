@@ -8,7 +8,6 @@ use axum::{
     routing::{any, delete, get, post},
 };
 use flate2::read::MultiGzDecoder;
-use serde::Deserialize;
 use std::io::Read;
 
 use super::{
@@ -19,20 +18,20 @@ use super::{
         prepare_bound_wasm, prepare_process_revision, restore_process_binding,
         stop_previous_process,
     },
+    management::{add_registry, create_publish_credential, revoke_publish_credential},
     marketplace_store::PUBLISHED_REGISTRY_SOURCE,
-    repository::validate_git,
     request_context::{
         authenticate, authenticate_manager, authenticate_publisher, authorize_publish_target,
         catalog_for, catalog_value, permitted,
     },
 };
 use crate::runtime::{
-    CreatePublishCredentialRequest, InstallPluginRequest, MarketplaceEntry, PageActionRequest,
-    PageActionResult, PageBody, PageDefinition, PluginRequest, PublishCredentialView,
-    PublishPluginRequest, PublishState, PublishedPluginView, RuntimeCatalog, RuntimeResponse,
+    InstallPluginRequest, MarketplaceEntry, PageActionRequest, PageActionResult, PageBody,
+    PageDefinition, PluginRequest, PublishPluginRequest, PublishState, PublishedPluginView,
+    RuntimeCatalog, RuntimeResponse,
 };
 
-const MAX_PUBLISH_BODY_BYTES: usize = 45 * 1024 * 1024;
+const MAX_PUBLISH_BODY_BYTES: usize = 52 * 1024 * 1024;
 
 pub fn router(state: RuntimeState) -> Router {
     Router::new()
@@ -225,6 +224,7 @@ async fn install(
         &session.tenant_id,
         discovered,
         "已校验 Git 完整提交、清单和预构建 artifact",
+        None,
     )
     .await?;
     catalog_for(&state, &session).await
@@ -245,31 +245,7 @@ async fn publish(
     drop(body);
     let tenant_id =
         authorize_publish_target(publisher, &request.git, request.tenant_id.as_deref())?;
-    let manifest = az_plugin_manifest::parse_manifest(&request.manifest_toml)?;
-    let metadata = manifest
-        .plugin
-        .marketplace
-        .as_ref()
-        .context("在线发布插件必须声明 [plugin.marketplace]")?;
-    let publication = MarketplaceEntry {
-        git: request.git.clone(),
-        rev: request.rev.clone(),
-        title: metadata.title.clone(),
-        summary: metadata.summary.clone(),
-        license: metadata.license.clone(),
-        tags: metadata.tags.clone(),
-        installed: false,
-        source_id: None,
-        state: None,
-        active_revision: None,
-        runtime: manifest.plugin.runtime.map(|runtime| runtime.kind),
-        capabilities: manifest.plugin.capabilities,
-    };
     let staged = state.repository.stage_publish(&request).await?;
-    state
-        .store
-        .upsert_published_marketplace_entry(&publication)
-        .await?;
     let source_id = state
         .store
         .source_id(&request.git)
@@ -424,6 +400,8 @@ async fn enable(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
+    let lifecycle_lock = state.activation_lock(&session.tenant_id, &source_id)?;
+    let _lifecycle_guard = lifecycle_lock.lock().await;
     let target = state
         .store
         .bound_runtime(&session.tenant_id, &source_id)
@@ -466,6 +444,8 @@ async fn disable(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
+    let lifecycle_lock = state.activation_lock(&session.tenant_id, &source_id)?;
+    let _lifecycle_guard = lifecycle_lock.lock().await;
     let previous = state
         .store
         .active_process(&session.tenant_id, &source_id)
@@ -502,6 +482,8 @@ async fn uninstall(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
+    let lifecycle_lock = state.activation_lock(&session.tenant_id, &source_id)?;
+    let _lifecycle_guard = lifecycle_lock.lock().await;
     let previous = state
         .store
         .active_process(&session.tenant_id, &source_id)
@@ -534,6 +516,8 @@ async fn rollback(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
+    let lifecycle_lock = state.activation_lock(&session.tenant_id, &source_id)?;
+    let _lifecycle_guard = lifecycle_lock.lock().await;
     let previous = state
         .store
         .active_process(&session.tenant_id, &source_id)
@@ -803,52 +787,6 @@ fn response(
             .insert(header::CONTENT_TYPE, content_type);
     }
     Ok(response)
-}
-
-#[derive(Deserialize)]
-struct RegistryRequest {
-    source: String,
-}
-
-async fn add_registry(
-    State(state): State<RuntimeState>,
-    headers: HeaderMap,
-    Json(request): Json<RegistryRequest>,
-) -> Result<StatusCode, RuntimeError> {
-    let session = authenticate_manager(&state, &headers).await?;
-    let source = request.source.trim();
-    if !source.starts_with("https://") {
-        return Err(RuntimeError::bad_request("市场来源必须使用 HTTPS"));
-    }
-    state.store.add_registry(&session.tenant_id, source).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn create_publish_credential(
-    State(state): State<RuntimeState>,
-    headers: HeaderMap,
-    Json(request): Json<CreatePublishCredentialRequest>,
-) -> Result<Json<RuntimeResponse<PublishCredentialView>>, RuntimeError> {
-    let session = authenticate_manager(&state, &headers).await?;
-    validate_git(&request.git)?;
-    let credential = state
-        .store
-        .create_publish_credential(&session.tenant_id, &request.git)
-        .await?;
-    Ok(Json(RuntimeResponse { data: credential }))
-}
-
-async fn revoke_publish_credential(
-    State(state): State<RuntimeState>,
-    headers: HeaderMap,
-    Path(credential_id): Path<String>,
-) -> Result<StatusCode, RuntimeError> {
-    let session = authenticate_manager(&state, &headers).await?;
-    state
-        .store
-        .revoke_publish_credential(&session.tenant_id, &credential_id)
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

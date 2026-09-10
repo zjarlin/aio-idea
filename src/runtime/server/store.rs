@@ -5,8 +5,8 @@ use sqlx::{PgPool, Row};
 
 use super::{page_state, repository::DiscoveredPlugin, supervisor::ProcessInstance};
 use crate::runtime::{
-    InstalledPluginView, PageDefinition, PluginLifecycleEvent, PluginRuntime, PluginState,
-    RuntimeAccountItem, RuntimeCatalog, TenantView, UserView,
+    InstalledPluginView, MarketplaceEntry, PageDefinition, PluginLifecycleEvent, PluginRuntime,
+    PluginState, RuntimeAccountItem, RuntimeCatalog, TenantView, UserView,
 };
 
 const SCHEMA: &str = r#"
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS plugin_sources (
 );
 CREATE TABLE IF NOT EXISTS plugin_revisions (
     id TEXT PRIMARY KEY,
-    source_id TEXT NOT NULL REFERENCES plugin_sources(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES plugin_sources(id) ON DELETE CASCADE ON UPDATE CASCADE,
     revision TEXT NOT NULL,
     runtime TEXT NOT NULL,
     manifest JSONB NOT NULL,
@@ -39,7 +39,7 @@ ALTER TABLE plugin_runtime_instances ADD COLUMN IF NOT EXISTS runtime_handle TEX
 ALTER TABLE plugin_runtime_instances ADD COLUMN IF NOT EXISTS endpoint TEXT;
 CREATE TABLE IF NOT EXISTS tenant_plugin_bindings (
     tenant_id TEXT NOT NULL,
-    source_id TEXT NOT NULL REFERENCES plugin_sources(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES plugin_sources(id) ON DELETE CASCADE ON UPDATE CASCADE,
     revision_id TEXT NOT NULL REFERENCES plugin_revisions(id),
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS plugin_registries (
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     UNIQUE(tenant_id, source)
 );
+ALTER TABLE plugin_revisions DROP CONSTRAINT IF EXISTS plugin_revisions_source_id_fkey;
+ALTER TABLE plugin_revisions ADD CONSTRAINT plugin_revisions_source_id_fkey FOREIGN KEY (source_id) REFERENCES plugin_sources(id) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE tenant_plugin_bindings DROP CONSTRAINT IF EXISTS tenant_plugin_bindings_source_id_fkey;
+ALTER TABLE tenant_plugin_bindings ADD CONSTRAINT tenant_plugin_bindings_source_id_fkey FOREIGN KEY (source_id) REFERENCES plugin_sources(id) ON DELETE CASCADE ON UPDATE CASCADE;
 "#;
 
 pub struct PluginStore {
@@ -121,6 +125,7 @@ impl PluginStore {
         super::marketplace_store::migrate(&self.pool).await?;
         super::publisher_store::migrate(&self.pool).await?;
         page_state::migrate(&self.pool).await?;
+        self.migrate_published_source_ids().await?;
         Ok(())
     }
 
@@ -193,6 +198,7 @@ impl PluginStore {
         tenant_id: &str,
         plugin: DiscoveredPlugin,
         instance: Option<&ProcessInstance>,
+        publication: Option<&MarketplaceEntry>,
     ) -> Result<()> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
@@ -207,17 +213,17 @@ impl PluginStore {
                 .bind(&plugin.git)
                 .fetch_one(&mut *transaction)
                 .await?;
-        let revision_id = format!("{source_id}:{}", plugin.revision);
-        sqlx::query(
-            "INSERT INTO plugin_revisions (id, source_id, revision, runtime, manifest, pages) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (source_id, revision) DO UPDATE SET manifest = EXCLUDED.manifest, pages = EXCLUDED.pages",
+        let requested_revision_id = format!("{source_id}:{}", plugin.revision);
+        let revision_id = sqlx::query_scalar::<_, String>(
+            "INSERT INTO plugin_revisions (id, source_id, revision, runtime, manifest, pages) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (source_id, revision) DO UPDATE SET manifest = EXCLUDED.manifest, pages = EXCLUDED.pages RETURNING id",
         )
-        .bind(&revision_id)
+        .bind(&requested_revision_id)
         .bind(&source_id)
         .bind(&plugin.revision)
         .bind(runtime_name(plugin.runtime))
         .bind(&plugin.manifest)
         .bind(serde_json::to_value(&plugin.pages)?)
-        .execute(&mut *transaction)
+        .fetch_one(&mut *transaction)
         .await?;
         sqlx::query(
             "INSERT INTO tenant_plugin_bindings (tenant_id, source_id, revision_id, enabled) VALUES ($1, $2, $3, TRUE) ON CONFLICT (tenant_id, source_id) DO UPDATE SET revision_id = EXCLUDED.revision_id, enabled = TRUE, updated_at = now()",
@@ -238,6 +244,13 @@ impl PluginStore {
             "健康检查通过并原子激活",
         )
         .await?;
+        if let Some(publication) = publication {
+            super::marketplace_store::upsert_published_marketplace_entry(
+                &mut transaction,
+                publication,
+            )
+            .await?;
+        }
         transaction.commit().await?;
         Ok(())
     }

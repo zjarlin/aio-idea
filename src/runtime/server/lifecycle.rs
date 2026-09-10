@@ -195,8 +195,15 @@ pub(super) async fn restore_process_binding(
         .process
         .start(tenant_id, source_id, &target.revision)
         .await?;
-    state
+    if let Err(error) = state
         .store
         .restore_process_instance(tenant_id, source_id, target, &instance)
         .await
+    {
+        if instance.created {
+            let _ = state.process.stop(&instance.instance_id).await;
+        }
+        return Err(error);
+    }
+    Ok(())
 }

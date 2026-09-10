@@ -1,5 +1,5 @@
 use anyhow::{Context as _, Result};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use super::store::{PluginStore, parse_runtime, runtime_name};
 use crate::runtime::MarketplaceEntry;
@@ -37,25 +37,28 @@ pub(super) async fn migrate(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-impl PluginStore {
-    pub async fn upsert_published_marketplace_entry(&self, entry: &MarketplaceEntry) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO marketplace_entries (source, git, rev, title, summary, license, tags, runtime, capabilities, synced_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now()) ON CONFLICT (source, git) DO UPDATE SET rev = EXCLUDED.rev, title = EXCLUDED.title, summary = EXCLUDED.summary, license = EXCLUDED.license, tags = EXCLUDED.tags, runtime = EXCLUDED.runtime, capabilities = EXCLUDED.capabilities, synced_at = now()",
-        )
-        .bind(PUBLISHED_REGISTRY_SOURCE)
-        .bind(&entry.git)
-        .bind(&entry.rev)
-        .bind(&entry.title)
-        .bind(&entry.summary)
-        .bind(&entry.license)
-        .bind(serde_json::to_value(&entry.tags)?)
-        .bind(entry.runtime.map(runtime_name))
-        .bind(serde_json::to_value(&entry.capabilities)?)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
+pub(super) async fn upsert_published_marketplace_entry(
+    transaction: &mut Transaction<'_, Postgres>,
+    entry: &MarketplaceEntry,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO marketplace_entries (source, git, rev, title, summary, license, tags, runtime, capabilities, synced_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now()) ON CONFLICT (source, git) DO UPDATE SET rev = EXCLUDED.rev, title = EXCLUDED.title, summary = EXCLUDED.summary, license = EXCLUDED.license, tags = EXCLUDED.tags, runtime = EXCLUDED.runtime, capabilities = EXCLUDED.capabilities, synced_at = now()",
+    )
+    .bind(PUBLISHED_REGISTRY_SOURCE)
+    .bind(&entry.git)
+    .bind(&entry.rev)
+    .bind(&entry.title)
+    .bind(&entry.summary)
+    .bind(&entry.license)
+    .bind(serde_json::to_value(&entry.tags)?)
+    .bind(entry.runtime.map(runtime_name))
+    .bind(serde_json::to_value(&entry.capabilities)?)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
 
+impl PluginStore {
     pub async fn replace_marketplace_entries(
         &self,
         source: &str,

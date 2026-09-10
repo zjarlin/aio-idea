@@ -128,7 +128,7 @@ impl PluginStore {
     ) -> Result<PublishJob> {
         let id = uuid::Uuid::new_v4().to_string();
         let row = sqlx::query(
-            "INSERT INTO plugin_publish_jobs (id, tenant_id, source_id, git, revision, runtime, page_count, state, detail) VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', '已持久化 artifact，等待后台验证') ON CONFLICT (tenant_id, git, revision) DO UPDATE SET state = CASE WHEN plugin_publish_jobs.state = 'active' THEN 'active' ELSE 'queued' END, detail = CASE WHEN plugin_publish_jobs.state = 'active' THEN plugin_publish_jobs.detail ELSE '已持久化 artifact，等待后台验证' END, updated_at = now() RETURNING id, tenant_id, source_id, git, revision, runtime, page_count, state, detail",
+            "INSERT INTO plugin_publish_jobs (id, tenant_id, source_id, git, revision, runtime, page_count, state, detail) VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', '已持久化 artifact，等待后台验证') ON CONFLICT (tenant_id, git, revision) DO UPDATE SET source_id = CASE WHEN plugin_publish_jobs.state = 'running' THEN plugin_publish_jobs.source_id ELSE EXCLUDED.source_id END, runtime = CASE WHEN plugin_publish_jobs.state = 'running' THEN plugin_publish_jobs.runtime ELSE EXCLUDED.runtime END, page_count = CASE WHEN plugin_publish_jobs.state = 'running' THEN plugin_publish_jobs.page_count ELSE EXCLUDED.page_count END, state = CASE WHEN plugin_publish_jobs.state = 'running' THEN 'running' ELSE 'queued' END, detail = CASE WHEN plugin_publish_jobs.state = 'running' THEN plugin_publish_jobs.detail ELSE '已持久化 artifact，等待后台验证' END, updated_at = now() RETURNING id, tenant_id, source_id, git, revision, runtime, page_count, state, detail",
         )
         .bind(id)
         .bind(tenant_id)
@@ -166,8 +166,8 @@ impl PluginStore {
         let page_count = page_count
             .map(|value| i32::try_from(value).context("发布页面数量超过数据库范围"))
             .transpose()?;
-        sqlx::query(
-            "UPDATE plugin_publish_jobs SET state = $2, detail = $3, page_count = COALESCE($4, page_count), updated_at = now() WHERE id = $1",
+        let result = sqlx::query(
+            "UPDATE plugin_publish_jobs SET state = $2, detail = $3, page_count = COALESCE($4, page_count), updated_at = now() WHERE id = $1 AND state = 'running'",
         )
         .bind(job_id)
         .bind(publish_state_name(state))
@@ -175,6 +175,7 @@ impl PluginStore {
         .bind(page_count)
         .execute(&self.pool)
         .await?;
+        ensure!(result.rows_affected() == 1, "发布任务已被其他执行批次接管");
         Ok(())
     }
 

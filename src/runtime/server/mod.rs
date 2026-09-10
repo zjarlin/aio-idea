@@ -1,22 +1,27 @@
+mod git_proof;
 mod http_error;
 mod installation;
 mod lifecycle;
+mod management;
 mod marketplace_store;
 mod page_state;
 mod process;
+mod publication_validation;
 mod publisher_store;
+mod remote_access;
 mod repository;
 mod request_context;
 mod routes;
+mod source_migration;
 mod store;
 mod supervisor;
 mod wasm;
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
 };
 
 use anyhow::{Context as _, Result};
@@ -35,6 +40,7 @@ pub struct RuntimeState {
     pub identity: Arc<aio_plugin_identity_server::IdentityService>,
     pub marketplace_url: String,
     marketplace_syncing: Arc<Mutex<HashSet<String>>>,
+    activation_locks: Arc<Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>>,
     pub process: Arc<process::ProcessManager>,
     pub wasm: Arc<wasm::WasmManager>,
 }
@@ -66,6 +72,7 @@ impl RuntimeState {
             process,
             wasm,
             marketplace_syncing: Arc::new(Mutex::new(HashSet::new())),
+            activation_locks: Arc::new(Mutex::new(HashMap::new())),
             marketplace_url: env::var("AIO_MARKETPLACE_URL")
                 .unwrap_or_else(|_| "https://github.com/zjarlin/aio.git".to_owned()),
         };
@@ -75,6 +82,25 @@ impl RuntimeState {
         state.reconcile_processes().await?;
         state.resume_published_jobs().await?;
         Ok(state)
+    }
+
+    pub(super) fn activation_lock(
+        &self,
+        tenant_id: &str,
+        source_id: &str,
+    ) -> Result<Arc<tokio::sync::Mutex<()>>> {
+        let key = format!("{tenant_id}\0{source_id}");
+        let mut locks = self
+            .activation_locks
+            .lock()
+            .map_err(|_| anyhow::anyhow!("插件生命周期锁已损坏"))?;
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+            return Ok(lock);
+        }
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(key, Arc::downgrade(&lock));
+        Ok(lock)
     }
 
     pub(super) fn sync_marketplace_sources(&self, sources: impl IntoIterator<Item = String>) {
@@ -142,13 +168,18 @@ impl RuntimeState {
                     .repository
                     .validate_published(&job.git, &job.revision)
                     .await?;
-                installation::activate(
+                let publication = state
+                    .repository
+                    .published_marketplace_entry(&job.git, &job.revision)?;
+                let activated = installation::activate(
                     &state,
                     &job.tenant_id,
                     discovered,
-                    "已校验 CI 发布的清单、artifact SHA-256 和运行时协议",
+                    "已校验 CI 上传的 Git commit/tree 证明、artifact SHA-256 和运行时协议",
+                    Some(&publication),
                 )
-                .await
+                .await?;
+                Ok::<_, anyhow::Error>(activated)
             }
             .await;
             let (publish_state, lifecycle, detail, page_count) = match result {
@@ -230,7 +261,7 @@ impl RuntimeState {
             let revision = plugin.revision.clone();
             if let Err(error) = self
                 .store
-                .activate("default", plugin, process.as_ref())
+                .activate("default", plugin, process.as_ref(), None)
                 .await
             {
                 if let Some(process) = &process
@@ -290,10 +321,14 @@ impl RuntimeState {
                 let _ = self.process.stop(&instance.instance_id).await;
                 return Err(error.context("恢复 process 插件页面失败"));
             }
-            if instance.created {
-                self.store
+            if instance.created
+                && let Err(error) = self
+                    .store
                     .recover_process_instance(&target, &instance)
-                    .await?;
+                    .await
+            {
+                let _ = self.process.stop(&instance.instance_id).await;
+                return Err(error.context("记录恢复的 process 插件实例失败"));
             }
         }
         Ok(())

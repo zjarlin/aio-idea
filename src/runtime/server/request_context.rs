@@ -1,3 +1,5 @@
+use std::env;
+
 use aio_plugin_identity_server::SessionContext;
 use axum::{
     Json,
@@ -8,6 +10,7 @@ use super::{RuntimeState, http_error::RuntimeError};
 use crate::runtime::{RuntimeCatalog, RuntimeResponse, UserView};
 
 const MANAGE_PERMISSION: &str = "plugin:manage";
+const PUBLISH_ACCOUNTS_ENV: &str = "AIO_PLUGIN_PUBLISH_ACCOUNTS";
 
 pub(super) async fn authenticate(
     state: &RuntimeState,
@@ -35,6 +38,18 @@ pub(super) async fn authenticate_manager(
     Ok(session)
 }
 
+pub(super) async fn authenticate_publish_manager(
+    state: &RuntimeState,
+    headers: &HeaderMap,
+) -> Result<SessionContext, RuntimeError> {
+    let session = authenticate_manager(state, headers).await?;
+    let configured = env::var(PUBLISH_ACCOUNTS_ENV).ok();
+    if !publish_account_allowed(configured.as_deref(), &session.account) {
+        return Err(RuntimeError::forbidden("当前账号没有平台插件发布权限"));
+    }
+    Ok(session)
+}
+
 pub(super) struct PublisherContext {
     pub tenant_id: String,
     pub git: Option<String>,
@@ -55,7 +70,7 @@ pub(super) async fn authenticate_publisher(
             git: Some(binding.git),
         });
     }
-    let session = authenticate_manager(state, headers).await?;
+    let session = authenticate_publish_manager(state, headers).await?;
     Ok(PublisherContext {
         tenant_id: session.tenant_id,
         git: None,
@@ -86,6 +101,15 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .to_str()
         .ok()?
         .strip_prefix("Bearer ")
+}
+
+fn publish_account_allowed(configured: Option<&str>, account: &str) -> bool {
+    configured.is_some_and(|configured| {
+        configured
+            .split(',')
+            .map(str::trim)
+            .any(|candidate| !candidate.is_empty() && candidate == account)
+    })
 }
 
 pub(super) async fn catalog_for(
@@ -164,5 +188,15 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn platform_publish_accounts_are_explicit_and_exact() {
+        assert!(!publish_account_allowed(None, "zjarlin"));
+        assert!(publish_account_allowed(Some("alice, zjarlin"), "zjarlin"));
+        assert!(!publish_account_allowed(
+            Some("alice,zjarlin-admin"),
+            "zjarlin"
+        ));
     }
 }

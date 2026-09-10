@@ -52,6 +52,9 @@ mkdir -p "$release"
 cp "$CARGO_TARGET_DIR/$target_directory/release/aio-public-shell" "$release/aio-public-shell"
 cp -R target/dx/aio-public-shell/release/web/public "$release/web"
 cp aio.toml "$release/aio.toml"
+mkdir -p "$release/systemd"
+cp deploy/aio-plugin-supervisor.service "$release/systemd/aio-plugin-supervisor.service"
+cp deploy/252/aio-public-shell.service "$release/systemd/aio-public-shell.service"
 
 readonly incoming="$deploy_root/releases/.incoming-$revision"
 readonly remote_release="$deploy_root/releases/$revision"
@@ -68,38 +71,100 @@ ssh "$deploy_host" "set -eu
 deploy_root='$deploy_root'
 incoming='$incoming'
 remote_release='$remote_release'
-previous=\$(readlink -f \"\$deploy_root/current\")
+previous=''
+if [ -L \"\$deploy_root/current\" ]; then
+    previous=\$(readlink -f \"\$deploy_root/current\")
+fi
 test -x \"\$incoming/aio-public-shell\"
 test -f \"\$incoming/aio.toml\"
 test -f \"\$incoming/web/index.html\"
+test -f \"\$incoming/systemd/aio-plugin-supervisor.service\"
+test -f \"\$incoming/systemd/aio-public-shell.service\"
 chown -R root:aio-shell \"\$incoming\"
 chmod -R u=rwX,g=rX,o= \"\$incoming\"
 mv \"\$incoming\" \"\$remote_release\"
-ln -s \"\$remote_release\" \"\$deploy_root/.next\"
-mv -Tf \"\$deploy_root/.next\" \"\$deploy_root/current\"
+backup=\$(mktemp -d \"\$deploy_root/releases/.systemd-backup.XXXXXX\")
+for unit in aio-plugin-supervisor.service aio-public-shell.service; do
+    if [ -f \"/etc/systemd/system/\$unit\" ]; then
+        cp -p \"/etc/systemd/system/\$unit\" \"\$backup/\$unit\"
+    else
+        touch \"\$backup/\$unit.missing\"
+    fi
+done
+supervisor_was_enabled=0
+shell_was_enabled=0
+if systemctl is-enabled aio-plugin-supervisor.service >/dev/null 2>&1; then
+    supervisor_was_enabled=1
+fi
+if systemctl is-enabled aio-public-shell.service >/dev/null 2>&1; then
+    shell_was_enabled=1
+fi
+rm -f \"\$deploy_root/.next\" \"\$deploy_root/.rollback\"
 
 wait_for_health() {
-    attempts=0
-    while [ "\$attempts" -lt 90 ]; do
-        if curl --fail --silent --show-error http://127.0.0.1:3080/health >/dev/null; then
+    url=\$1
+    seconds=\$2
+    deadline=\$((\$(date +%s) + seconds))
+    while [ \$(date +%s) -lt \"\$deadline\" ]; do
+        if curl --fail --silent --show-error --connect-timeout 1 --max-time 2 \"\$url\" >/dev/null; then
             return 0
         fi
-        attempts=\$((attempts + 1))
         sleep 1
     done
     return 1
 }
 
-if systemctl restart aio-plugin-supervisor.service \\
-    && systemctl restart aio-public-shell.service \\
-    && wait_for_health; then
+restore_previous() {
+    set +e
+    rm -f \"\$deploy_root/.next\"
+    if [ -n \"\$previous\" ]; then
+        ln -s \"\$previous\" \"\$deploy_root/.rollback\"
+        mv -Tf \"\$deploy_root/.rollback\" \"\$deploy_root/current\"
+    else
+        rm -f \"\$deploy_root/current\"
+    fi
+    for unit in aio-plugin-supervisor.service aio-public-shell.service; do
+        if [ -f \"\$backup/\$unit.missing\" ]; then
+            rm -f \"/etc/systemd/system/\$unit\"
+        else
+            install -m 0644 \"\$backup/\$unit\" \"/etc/systemd/system/\$unit\"
+        fi
+    done
+    systemctl daemon-reload
+    if [ \"\$supervisor_was_enabled\" -eq 0 ]; then
+        systemctl disable aio-plugin-supervisor.service
+    fi
+    if [ \"\$shell_was_enabled\" -eq 0 ]; then
+        systemctl disable aio-public-shell.service
+    fi
+    if [ -n \"\$previous\" ]; then
+        systemctl restart aio-plugin-supervisor.service
+        systemctl restart aio-public-shell.service
+        wait_for_health http://127.0.0.1:3080/health 300
+    else
+        systemctl stop aio-public-shell.service aio-plugin-supervisor.service
+    fi
+    rm -rf \"\$backup\" \"\$remote_release\"
+}
+
+activate_candidate() {
+    install -m 0644 \"\$remote_release/systemd/aio-plugin-supervisor.service\" /etc/systemd/system/aio-plugin-supervisor.service \\
+        && install -m 0644 \"\$remote_release/systemd/aio-public-shell.service\" /etc/systemd/system/aio-public-shell.service \\
+        && systemctl daemon-reload \\
+        && systemctl enable aio-plugin-supervisor.service aio-public-shell.service \\
+        && ln -s \"\$remote_release\" \"\$deploy_root/.next\" \\
+        && mv -Tf \"\$deploy_root/.next\" \"\$deploy_root/current\" \\
+        && systemctl restart aio-plugin-supervisor.service \\
+        && systemctl restart aio-public-shell.service \\
+        && wait_for_health http://127.0.0.1:3080/health 300 \\
+        && wait_for_health https://aio.addzero.site/health 60
+}
+
+if activate_candidate; then
+    rm -rf \"\$backup\"
     printf '已激活 %s\\n' '$revision'
 else
-    ln -s \"\$previous\" \"\$deploy_root/.rollback\"
-    mv -Tf \"\$deploy_root/.rollback\" \"\$deploy_root/current\"
-    systemctl restart aio-plugin-supervisor.service
-    systemctl restart aio-public-shell.service
-    wait_for_health
+    restore_previous
     printf '发布失败，已恢复 %s\\n' \"\$previous\" >&2
     exit 1
 fi"
