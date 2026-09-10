@@ -180,21 +180,8 @@ impl RepositoryInstaller {
             .runtime
             .as_ref()
             .context("发布插件缺少 plugin.runtime")?;
-        ensure!(
-            matches!(
-                runtime.kind,
-                PluginRuntime::PageDefinition | PluginRuntime::WasmComponent
-            ),
-            "发布接口当前只接受 page-definition 或 wasm-component artifact"
-        );
-        if runtime.kind == PluginRuntime::WasmComponent {
-            ensure!(
-                manifest.plugin.capabilities.network.is_empty()
-                    && manifest.plugin.capabilities.filesystem.is_empty()
-                    && !manifest.plugin.capabilities.database,
-                "当前 Wasm Component 宿主未授予网络、文件系统或数据库能力"
-            );
-        }
+        ensure_publish_runtime(runtime.kind)?;
+        ensure_publish_capabilities(&manifest)?;
         tokio::fs::create_dir_all(&self.cache_root)
             .await
             .context("创建插件缓存目录失败")?;
@@ -266,21 +253,8 @@ impl RepositoryInstaller {
             .runtime
             .as_ref()
             .context("发布插件缺少 plugin.runtime")?;
-        ensure!(
-            matches!(
-                runtime.kind,
-                PluginRuntime::PageDefinition | PluginRuntime::WasmComponent
-            ),
-            "发布接口当前只接受 page-definition 或 wasm-component artifact"
-        );
-        if runtime.kind == PluginRuntime::WasmComponent {
-            ensure!(
-                manifest.plugin.capabilities.network.is_empty()
-                    && manifest.plugin.capabilities.filesystem.is_empty()
-                    && !manifest.plugin.capabilities.database,
-                "当前 Wasm Component 宿主未授予网络、文件系统或数据库能力"
-            );
-        }
+        ensure_publish_runtime(runtime.kind)?;
+        ensure_publish_capabilities(&manifest)?;
         let validation_root = root.clone();
         let report = tokio::task::spawn_blocking(move || validate_repository(&validation_root))
             .await
@@ -441,6 +415,28 @@ fn published_source_id(git: &str) -> String {
     format!("publish-{:x}", Sha256::digest(git.as_bytes()))
 }
 
+fn ensure_publish_runtime(runtime: PluginRuntime) -> Result<()> {
+    ensure!(
+        matches!(
+            runtime,
+            PluginRuntime::PageDefinition | PluginRuntime::WasmComponent | PluginRuntime::Process
+        ),
+        "发布接口只接受 page-definition、wasm-component 或 process artifact"
+    );
+    Ok(())
+}
+
+fn ensure_publish_capabilities(manifest: &az_plugin_manifest::RepositoryManifest) -> Result<()> {
+    let capabilities = &manifest.plugin.capabilities;
+    ensure!(
+        capabilities.network.is_empty()
+            && capabilities.filesystem.is_empty()
+            && !capabilities.database,
+        "当前在线发布宿主未授予网络、文件系统或数据库能力"
+    );
+    Ok(())
+}
+
 async fn download_archive(source: reqwest::Url, staging: &Path) -> Result<PathBuf> {
     let response = reqwest::get(source)
         .await
@@ -574,6 +570,19 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn rejects_capabilities_not_granted_to_online_publications() -> Result<()> {
+        let manifest = parse_manifest(
+            "[plugin.runtime]\nkind = 'process'\nartifact = 'plugin.js'\ncontainer_image = 'node:22@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3'\nentrypoint = ['node', '{artifact}']\nhealth_check = '/health'\n\n[plugin.capabilities]\ndatabase = true\n",
+        )?;
+
+        let error = ensure_publish_capabilities(&manifest)
+            .expect_err("未授权的数据库能力必须在暂存前被拒绝");
+
+        assert!(error.to_string().contains("未授予"));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn publishes_validated_page_definition_artifact() -> Result<()> {
         let artifact = br#"[{"id":"published-page","label":"Published","icon":"box","scene":{"id":"community","label":"Community"},"required_permission":null,"body":{"kind":"text","title":"Published","content":"from CI"}}]"#;
@@ -609,6 +618,47 @@ pages = ["published-page"]
         assert!(
             installer
                 .artifact(&request.rev, "dist/pages.json")?
+                .is_file()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn publishes_validated_process_artifact() -> Result<()> {
+        let artifact = b"committed process artifact";
+        let request = PublishPluginRequest {
+            git: "https://github.com/example/aio-plugin-process.git".to_owned(),
+            rev: "c".repeat(40),
+            manifest_toml: r#"
+[plugin.runtime]
+kind = "process"
+artifact = "dist/plugin.jar"
+host_version = ">=2026.9.9"
+container_image = "eclipse-temurin:21-jre@sha256:5c67d24ee8e3dd810b2a0cb6c3827ced2ac5d22729538f90b36c2b9d77678bb8"
+entrypoint = ["java", "-jar", "{artifact}"]
+health_check = "/health"
+shutdown_timeout_seconds = 10
+
+[plugin.capabilities]
+network = []
+filesystem = []
+database = false
+"#
+            .to_owned(),
+            artifact_base64: base64::engine::general_purpose::STANDARD.encode(artifact),
+            artifact_sha256: format!("{:x}", Sha256::digest(artifact)),
+            tenant_id: None,
+        };
+        let temporary = tempfile::tempdir()?;
+        let installer = RepositoryInstaller::new(temporary.path().join("cache"));
+
+        let published = installer.publish(&request).await?;
+
+        assert_eq!(published.runtime, PluginRuntime::Process);
+        assert!(published.pages.is_empty());
+        assert!(
+            installer
+                .artifact(&request.rev, "dist/plugin.jar")?
                 .is_file()
         );
         Ok(())

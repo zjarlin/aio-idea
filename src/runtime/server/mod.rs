@@ -134,7 +134,7 @@ impl RuntimeState {
                     &job.source_id,
                     None,
                     "publish-verify",
-                    "正在执行 Component ABI、页面定义和健康检查",
+                    "正在校验运行时 artifact、页面定义和健康检查",
                 )
                 .await;
             let result = async {

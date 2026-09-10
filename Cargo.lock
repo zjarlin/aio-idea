@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "aio-public-shell"
-version = "2026.9.9"
+version = "2026.9.10"
 dependencies = [
  "aio-plugin-account",
  "aio-plugin-identity-client",

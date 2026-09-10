@@ -4,7 +4,7 @@
 
 市场请求只从 PostgreSQL 缓存读取。远程 HTTPS/Git registry 在启动和请求后异步刷新；刷新失败只保留最近成功索引并写入同步状态，不影响市场页面、已安装插件或租户组合。
 
-`POST /api/runtime/plugins/publish` 接收 CI 提交的锁定 SHA、清单、artifact 和 SHA-256，并复用安装事务的校验、健康检查、原子激活和回滚。发布凭证由 `plugin_publish_credentials` 按租户和 Git 来源限制，可通过运行时 API 轮换或撤销；不使用全局 CI 发布令牌。
+`POST /api/runtime/plugins/publish` 接收 CI 提交的锁定 SHA、清单、artifact 和 SHA-256，支持 `page-definition`、`wasm-component` 和 `process`，并复用安装事务的校验、健康检查、原子激活和回滚。发布凭证由 `plugin_publish_credentials` 按租户和 Git 来源限制，可通过运行时 API 轮换或撤销；不使用全局 CI 发布令牌。
 
 宿主启动时从 PostgreSQL 的活动租户组合生成 process 实例白名单，并调用监督器清理不在白名单内的受管容器和隔离网络；数据库中的孤立 active 记录同时转为 stopped。
 
