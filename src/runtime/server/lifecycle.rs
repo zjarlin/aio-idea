@@ -135,6 +135,7 @@ pub(super) async fn prepare_process_revision(
     source_id: &str,
     revision: &str,
 ) -> anyhow::Result<(ProcessInstance, Vec<az_plugin_manifest::PageDefinition>)> {
+    state.restore_package_cache(revision).await?;
     state.process.health().await?;
     let instance = state.process.start(tenant_id, source_id, revision).await?;
     let validation = async {
@@ -188,6 +189,7 @@ pub(super) async fn restore_process_binding(
     let Some(target) = target else {
         return Ok(());
     };
+    state.restore_package_cache(&target.revision).await?;
     if target.runtime != PluginRuntime::Process {
         return Ok(());
     }

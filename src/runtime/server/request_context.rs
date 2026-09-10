@@ -50,6 +50,7 @@ pub(super) async fn authenticate_publish_manager(
     Ok(session)
 }
 
+#[derive(Clone)]
 pub(super) struct PublisherContext {
     pub tenant_id: String,
     pub git: Option<String>,

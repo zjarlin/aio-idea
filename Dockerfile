@@ -9,8 +9,8 @@ RUN dx build --platform web --release \
 FROM debian:bookworm-slim
 RUN useradd --create-home --uid 10001 aio
 WORKDIR /opt/aio
-COPY --from=build /source/target/release/aio-public-shell /usr/local/bin/aio-application
-COPY --from=build /source/target/dx/aio-public-shell/release/web/public /opt/aio/web
+COPY --from=build /source/target/release/aio-idea /usr/local/bin/aio-application
+COPY --from=build /source/target/dx/aio-idea/release/web/public /opt/aio/web
 COPY --from=build /source/aio.toml /opt/aio/aio.toml
 ENV AIO_WEB_PORT=8080
 ENV AIO_WEB_DIST=/opt/aio/web

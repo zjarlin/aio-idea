@@ -1,6 +1,6 @@
 [application]
-name = "aio-public-shell"
-title = "AIO"
+name = "aio-idea"
+title = "AIO IDEA"
 
 [[plugins]]
 git = "https://github.com/zjarlin/aio-plugin-hello.git"

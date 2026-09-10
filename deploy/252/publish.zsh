@@ -5,7 +5,7 @@ set -euo pipefail
 export COPYFILE_DISABLE=1
 
 readonly deploy_host="${AIO_DEPLOY_HOST:-root@192.168.31.252}"
-readonly deploy_root="${AIO_DEPLOY_ROOT:-/opt/aio-public-shell}"
+readonly deploy_root="${AIO_DEPLOY_ROOT:-/opt/aio-idea}"
 readonly target="x86_64-unknown-linux-gnu.2.17"
 readonly target_directory="${target%%.*}"
 readonly repository="$(git rev-parse --show-toplevel)"
@@ -49,12 +49,12 @@ dx build --platform web --release --debug-symbols false
 
 readonly release="$artifact/release"
 mkdir -p "$release"
-cp "$CARGO_TARGET_DIR/$target_directory/release/aio-public-shell" "$release/aio-public-shell"
-cp -R target/dx/aio-public-shell/release/web/public "$release/web"
+cp "$CARGO_TARGET_DIR/$target_directory/release/aio-idea" "$release/aio-idea"
+cp -R target/dx/aio-idea/release/web/public "$release/web"
 cp aio.toml "$release/aio.toml"
 mkdir -p "$release/systemd"
 cp deploy/aio-plugin-supervisor.service "$release/systemd/aio-plugin-supervisor.service"
-cp deploy/252/aio-public-shell.service "$release/systemd/aio-public-shell.service"
+cp deploy/252/aio-idea.service "$release/systemd/aio-idea.service"
 
 readonly incoming="$deploy_root/releases/.incoming-$revision"
 readonly remote_release="$deploy_root/releases/$revision"
@@ -75,16 +75,16 @@ previous=''
 if [ -L \"\$deploy_root/current\" ]; then
     previous=\$(readlink -f \"\$deploy_root/current\")
 fi
-test -x \"\$incoming/aio-public-shell\"
+test -x \"\$incoming/aio-idea\"
 test -f \"\$incoming/aio.toml\"
 test -f \"\$incoming/web/index.html\"
 test -f \"\$incoming/systemd/aio-plugin-supervisor.service\"
-test -f \"\$incoming/systemd/aio-public-shell.service\"
+test -f \"\$incoming/systemd/aio-idea.service\"
 chown -R root:aio-shell \"\$incoming\"
 chmod -R u=rwX,g=rX,o= \"\$incoming\"
 mv \"\$incoming\" \"\$remote_release\"
 backup=\$(mktemp -d \"\$deploy_root/releases/.systemd-backup.XXXXXX\")
-for unit in aio-plugin-supervisor.service aio-public-shell.service; do
+for unit in aio-plugin-supervisor.service aio-idea.service; do
     if [ -f \"/etc/systemd/system/\$unit\" ]; then
         cp -p \"/etc/systemd/system/\$unit\" \"\$backup/\$unit\"
     else
@@ -96,7 +96,7 @@ shell_was_enabled=0
 if systemctl is-enabled aio-plugin-supervisor.service >/dev/null 2>&1; then
     supervisor_was_enabled=1
 fi
-if systemctl is-enabled aio-public-shell.service >/dev/null 2>&1; then
+if systemctl is-enabled aio-idea.service >/dev/null 2>&1; then
     shell_was_enabled=1
 fi
 rm -f \"\$deploy_root/.next\" \"\$deploy_root/.rollback\"
@@ -123,7 +123,7 @@ restore_previous() {
     else
         rm -f \"\$deploy_root/current\"
     fi
-    for unit in aio-plugin-supervisor.service aio-public-shell.service; do
+    for unit in aio-plugin-supervisor.service aio-idea.service; do
         if [ -f \"\$backup/\$unit.missing\" ]; then
             rm -f \"/etc/systemd/system/\$unit\"
         else
@@ -135,27 +135,27 @@ restore_previous() {
         systemctl disable aio-plugin-supervisor.service
     fi
     if [ \"\$shell_was_enabled\" -eq 0 ]; then
-        systemctl disable aio-public-shell.service
+        systemctl disable aio-idea.service
     fi
     if [ -n \"\$previous\" ]; then
         systemctl restart aio-plugin-supervisor.service
-        systemctl restart aio-public-shell.service
+        systemctl restart aio-idea.service
         wait_for_health http://127.0.0.1:3080/health 300
     else
-        systemctl stop aio-public-shell.service aio-plugin-supervisor.service
+        systemctl stop aio-idea.service aio-plugin-supervisor.service
     fi
     rm -rf \"\$backup\" \"\$remote_release\"
 }
 
 activate_candidate() {
     install -m 0644 \"\$remote_release/systemd/aio-plugin-supervisor.service\" /etc/systemd/system/aio-plugin-supervisor.service \\
-        && install -m 0644 \"\$remote_release/systemd/aio-public-shell.service\" /etc/systemd/system/aio-public-shell.service \\
+        && install -m 0644 \"\$remote_release/systemd/aio-idea.service\" /etc/systemd/system/aio-idea.service \\
         && systemctl daemon-reload \\
-        && systemctl enable aio-plugin-supervisor.service aio-public-shell.service \\
+        && systemctl enable aio-plugin-supervisor.service aio-idea.service \\
         && ln -s \"\$remote_release\" \"\$deploy_root/.next\" \\
         && mv -Tf \"\$deploy_root/.next\" \"\$deploy_root/current\" \\
         && systemctl restart aio-plugin-supervisor.service \\
-        && systemctl restart aio-public-shell.service \\
+        && systemctl restart aio-idea.service \\
         && wait_for_health http://127.0.0.1:3080/health 300 \\
         && wait_for_health https://aio.addzero.site/health 60
 }

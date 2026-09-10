@@ -1,11 +1,16 @@
-mod git_proof;
+mod activation_store;
 mod http_error;
 mod installation;
 mod lifecycle;
 mod management;
 mod marketplace_store;
+mod package_repository;
+mod package_store;
 mod page_state;
 mod process;
+mod publication;
+#[cfg(test)]
+mod publication_http_tests;
 mod publication_validation;
 mod publisher_store;
 mod remote_access;
@@ -41,6 +46,7 @@ pub struct RuntimeState {
     pub marketplace_url: String,
     marketplace_syncing: Arc<Mutex<HashSet<String>>>,
     activation_locks: Arc<Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>>,
+    publication_slots: Arc<tokio::sync::Semaphore>,
     pub process: Arc<process::ProcessManager>,
     pub wasm: Arc<wasm::WasmManager>,
 }
@@ -73,8 +79,9 @@ impl RuntimeState {
             wasm,
             marketplace_syncing: Arc::new(Mutex::new(HashSet::new())),
             activation_locks: Arc::new(Mutex::new(HashMap::new())),
+            publication_slots: Arc::new(tokio::sync::Semaphore::new(2)),
             marketplace_url: env::var("AIO_MARKETPLACE_URL")
-                .unwrap_or_else(|_| "https://github.com/zjarlin/aio.git".to_owned()),
+                .unwrap_or_else(|_| "https://github.com/zjarlin/aio-platform.git".to_owned()),
         };
         state.sync_marketplace_sources([state.marketplace_url.clone()]);
         state.ensure_default_plugins().await?;
@@ -143,6 +150,9 @@ impl RuntimeState {
         }
         let state = self.clone();
         tokio::spawn(async move {
+            let Ok(_permit) = state.publication_slots.clone().acquire_owned().await else {
+                return;
+            };
             let claimed = match state.store.claim_publish_job(&job.id).await {
                 Ok(claimed) => claimed,
                 Err(error) => {
@@ -164,6 +174,7 @@ impl RuntimeState {
                 )
                 .await;
             let result = async {
+                state.restore_package_cache(&job.revision).await?;
                 let discovered = state
                     .repository
                     .validate_published(&job.git, &job.revision)
@@ -175,7 +186,7 @@ impl RuntimeState {
                     &state,
                     &job.tenant_id,
                     discovered,
-                    "已校验 CI 上传的 Git commit/tree 证明、artifact SHA-256 和运行时协议",
+                    "已校验二进制插件包内容摘要、能力声明和运行时协议",
                     Some(&publication),
                 )
                 .await?;
@@ -285,6 +296,9 @@ impl RuntimeState {
     async fn reconcile_processes(&self) -> Result<()> {
         self.store.stop_orphan_process_records().await?;
         let targets = self.store.enabled_process_targets().await?;
+        for target in &targets {
+            self.restore_package_cache(&target.revision).await?;
+        }
         self.process.health().await?;
         self.process
             .reconcile(
@@ -377,6 +391,7 @@ impl RuntimeState {
         revision: &str,
         artifact: &str,
     ) -> Result<wasm::WasmActivation> {
+        self.restore_package_cache(revision).await?;
         let artifact = self.repository.artifact(revision, artifact)?;
         let manager = self.wasm.clone();
         let tenant_id = tenant_id.to_owned();

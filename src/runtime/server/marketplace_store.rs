@@ -64,6 +64,11 @@ impl PluginStore {
         git: &str,
         requested_revision: Option<&str>,
     ) -> Result<Option<MarketplaceEntry>> {
+        if let Some(revision) =
+            requested_revision.filter(|revision| super::repository::is_package_revision(revision))
+        {
+            return self.published_package_entry(git, revision).await;
+        }
         let row = sqlx::query(
             "SELECT git, rev, title, summary, license, tags, runtime, capabilities FROM marketplace_entries WHERE source = $1 AND git = $2",
         )

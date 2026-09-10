@@ -1,6 +1,6 @@
 [application]
-name = "aio-public-shell"
+name = "aio-idea"
 default_platform = "web"
 
 [web.app]
-title = "AIO"
+title = "AIO IDEA"

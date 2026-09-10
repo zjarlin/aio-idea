@@ -1,15 +1,25 @@
 # 服务端插件生命周期
 
-`mod.rs` 只装配状态；`repository.rs` 负责 Git 发现与版本缓存，`store.rs` 负责 PostgreSQL 生命周期事务，`marketplace_store.rs` 负责市场索引缓存，`routes.rs` 负责 HTTP 边界。
+`mod.rs` 装配状态；`repository.rs` 负责 Git 发现与版本缓存，`package_repository.rs` 负责二进制包缓存，`package_store.rs` 保存 PostgreSQL 包与不可变版本，`activation_store.rs` 负责激活事务，`store.rs` 管理其余生命周期状态，`marketplace_store.rs` 管理市场索引，`publication.rs` 和 `routes.rs` 提供 HTTP 边界。
 
 市场请求只从 PostgreSQL 缓存读取。远程 HTTPS/Git registry 在启动和请求后异步刷新；刷新失败只保留最近成功索引并写入同步状态，不影响市场页面、已安装插件或租户组合。
 
-市场安装会先按 Git 来源和可选完整 revision 查询 `aio://published` 元数据。命中后只校验版本缓存中的已发布清单与 artifact，不访问远程 Git；缓存缺失会直接失败，不静默降级到网络。只有尚未发布或明确请求其他 revision 的仓库才进入受限 Git 发现流程。
+市场安装先按来源与可选 revision 查询已发布元数据。二进制包的 SHA-256 版本从 PostgreSQL 恢复缓存并重新校验，不访问远程 Git；不存在的包摘要不能当成 Git ref。旧 Git 安装仍锁定完整提交，不与包内容版本混用。
 
-`POST /api/runtime/plugins/publish` 接收 CI 提交的锁定 SHA、清单、artifact、SHA-256，以及包含原始 commit 和路径所需 tree 对象的 `git_proof`。宿主离线校验 Git 对象哈希，并确认清单与 artifact 确实属于该 commit，无需在发布请求中回连远程 Git；随后复用安装事务的协议校验、健康检查、原子激活和回滚。只有激活成功的版本才更新市场缓存。发布凭证由 `plugin_publish_credentials` 按租户和 Git 来源限制，只有 `AIO_PLUGIN_PUBLISH_ACCOUNTS` 明确授权的平台账号可以通过运行时 API 创建或撤销；不使用全局 CI 发布令牌。
+`POST /api/runtime/plugins/publish` 直接接收 `application/vnd.aio.plugin+gzip` 包字节，编解码和完整性验证统一复用 `az-plugin-package`。不接收旧 GitProof JSON，不要求 Actions 或已提交产物。完整包保存于 `plugin_packages.archive`，同来源同 SemVer 不可覆盖不同内容；后台任务通过协议验证和健康检查后原子激活，只有成功的版本才更新市场并允许下载。发布凭证仍绑定租户和 Git 来源，只能由 `AIO_PLUGIN_PUBLISH_ACCOUNTS` 明确授权的管理员创建和撤销。
+
+`GET /api/runtime/packages/<SHA-256>` 为已登录用户下载已成功激活的包。安装、启用、回滚和实例恢复可从数据库重建丢失缓存。发布最多两个并发操作，二进制中心默认 1024 个版本、2 GiB 存储；可通过 `AIO_PLUGIN_PACKAGE_MAX_REVISIONS` 和 `AIO_PLUGIN_PACKAGE_MAX_BYTES` 调整，配额在 PostgreSQL 事务锁内检查。
+
+鉴权和并发检查位于读取上传正文之前。发布请求具有单调递增顺序，激活事务与新请求入队共享租户/来源锁，已被后续请求替代的旧任务不能覆盖活动版本。租户安装或回滚旧包不修改官方市场的当前发布条目。
 
 宿主启动时从 PostgreSQL 的活动租户组合生成 process 实例白名单，并调用监督器清理不在白名单内的受管容器和隔离网络；数据库中的孤立 active 记录同时转为 stopped。
 
 远程 Git 和 HTTPS registry 仅允许标准 443 端口的公网目标，解析出的地址会固定到实际连接并禁用重定向。单次仓库展开、条目数、市场索引响应以及整个版本缓存分别受配额限制；252 默认最多保留 1 GiB、10 万个文件系统条目和 512 个版本，可通过对应的 `AIO_PLUGIN_CACHE_MAX_*` 环境变量收紧。
 
 页面动作统一进入 `POST /api/runtime/pages/action`。Wasm Component 复用 `handle`；process 插件通过仅宿主可访问的 `POST /aio/action` 接收同一事件。该内部路径不属于插件公开 `routes`，不能由浏览器经服务代理直接调用。
+
+## 集成测试
+
+常规运行 `cargo test --no-default-features --features server`。包存储测试显式要求 `AIO_TEST_DATABASE_URL` 指向测试 PostgreSQL，运行 `stores_immutable_binary_packages_and_restores_deleted_cache -- --ignored`；它在临时 schema 中验证版本不可变、二进制持久化和缓存恢复。
+
+HTTP 联调运行 `binary_cli_publishes_downloads_recovers_and_rolls_back_over_http -- --ignored`，需要同值的 `AIO_TEST_DATABASE_URL` 与 `AIO_DATABASE_URL`、`AIO_TEST_CLI` 指向已构建的 CLI，以及测试用 `AIO_BOOTSTRAP_ACCOUNT`、`AIO_BOOTSTRAP_PASSWORD`、`AIO_PLUGIN_PUBLISH_ACCOUNTS`。只使用独立可丢弃的测试数据库。该测试通过真实 CLI 和 HTTP 验证无 Git 目录打包、上传、来源权限、版本冲突、下载、卸载重装、回滚、无效包保留活动版本以及租户切换；不依赖 Docker，也不作为 process 隔离验证的替代。

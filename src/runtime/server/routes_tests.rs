@@ -1,6 +1,4 @@
 use az_plugin_manifest::{CapabilityManifest, PageActionDefinition, SceneDefinition};
-use flate2::{Compression, write::GzEncoder};
-use std::io::Write;
 
 use super::*;
 use crate::runtime::{InstalledPluginView, PluginRuntime, PluginState};
@@ -161,85 +159,4 @@ fn action_result_cannot_change_published_actions() {
         )
         .is_err()
     );
-}
-
-#[test]
-fn decodes_gzip_publish_body() {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(br#"{"git":"https://example.com/plugin.git"}"#)
-        .unwrap();
-    let body = Bytes::from(encoder.finish().unwrap());
-    let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
-
-    let Ok(decoded) = decode_publish_body(&headers, &body) else {
-        panic!("gzip 发布请求应能解压");
-    };
-    assert_eq!(decoded, br#"{"git":"https://example.com/plugin.git"}"#);
-}
-
-#[test]
-fn rejects_unsupported_publish_encoding() {
-    let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("br"));
-
-    let Err(error) = decode_publish_body(&headers, &Bytes::new()) else {
-        panic!("不支持的发布编码必须被拒绝");
-    };
-    assert_eq!(
-        error.into_response().status(),
-        StatusCode::UNSUPPORTED_MEDIA_TYPE
-    );
-}
-
-#[test]
-fn rejects_gzip_publish_body_over_decoded_limit() {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(b"12345").unwrap();
-    let body = Bytes::from(encoder.finish().unwrap());
-    let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
-
-    let Err(error) = decode_publish_body_with_limit(&headers, &body, 4) else {
-        panic!("超过解压限制的发布请求必须被拒绝");
-    };
-    assert_eq!(
-        error.into_response().status(),
-        StatusCode::PAYLOAD_TOO_LARGE
-    );
-}
-
-#[test]
-fn rejects_multiple_publish_encodings() {
-    let mut headers = HeaderMap::new();
-    headers.append(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
-    headers.append(header::CONTENT_ENCODING, HeaderValue::from_static("br"));
-
-    let Err(error) = decode_publish_body(&headers, &Bytes::new()) else {
-        panic!("多个发布编码必须被拒绝");
-    };
-    assert_eq!(
-        error.into_response().status(),
-        StatusCode::UNSUPPORTED_MEDIA_TYPE
-    );
-}
-
-#[test]
-fn requires_json_publish_content_type() {
-    let headers = HeaderMap::new();
-    let Err(error) = ensure_publish_content_type(&headers) else {
-        panic!("缺少发布 Content-Type 必须被拒绝");
-    };
-    assert_eq!(
-        error.into_response().status(),
-        StatusCode::UNSUPPORTED_MEDIA_TYPE
-    );
-
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/vnd.aio.plugin+json; charset=utf-8"),
-    );
-    assert!(ensure_publish_content_type(&headers).is_ok());
 }

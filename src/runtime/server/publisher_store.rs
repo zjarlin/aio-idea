@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result, ensure};
 use sha2::{Digest as _, Sha256};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use super::store::PluginStore;
 use crate::runtime::{PluginRuntime, PublishCredentialView, PublishState};
@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS plugin_publish_jobs (
     UNIQUE(tenant_id, git, revision)
 );
 CREATE INDEX IF NOT EXISTS plugin_publish_jobs_pending_idx ON plugin_publish_jobs(state, updated_at);
+CREATE SEQUENCE IF NOT EXISTS plugin_publish_requests_seq;
+ALTER TABLE plugin_publish_jobs ADD COLUMN IF NOT EXISTS request_order BIGINT NOT NULL DEFAULT nextval('plugin_publish_requests_seq');
 "#;
 
 #[derive(Clone)]
@@ -55,6 +57,35 @@ pub(super) async fn migrate(pool: &PgPool) -> Result<()> {
         .execute(pool)
         .await
         .context("创建插件发布凭据表失败")?;
+    Ok(())
+}
+
+async fn lock_publication_source(
+    transaction: &mut Transaction<'_, Postgres>,
+    tenant_id: &str,
+    git: &str,
+) -> Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 1729))")
+        .bind(serde_json::to_string(&(tenant_id, git))?)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
+pub(super) async fn ensure_current_publication(
+    transaction: &mut Transaction<'_, Postgres>,
+    tenant_id: &str,
+    git: &str,
+    revision: &str,
+) -> Result<()> {
+    lock_publication_source(transaction, tenant_id, git).await?;
+    let current: Option<String> = sqlx::query_scalar(
+        "SELECT revision FROM plugin_publish_jobs WHERE tenant_id = $1 AND git = $2 ORDER BY request_order DESC LIMIT 1",
+    ).bind(tenant_id).bind(git).fetch_optional(&mut **transaction).await?;
+    ensure!(
+        current.as_deref() == Some(revision),
+        "当前发布已被后续请求替代，保留现有活动版本"
+    );
     Ok(())
 }
 
@@ -127,8 +158,10 @@ impl PluginStore {
         page_count: usize,
     ) -> Result<PublishJob> {
         let id = uuid::Uuid::new_v4().to_string();
+        let mut transaction = self.pool.begin().await?;
+        lock_publication_source(&mut transaction, tenant_id, git).await?;
         let row = sqlx::query(
-            "INSERT INTO plugin_publish_jobs (id, tenant_id, source_id, git, revision, runtime, page_count, state, detail) VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', '已持久化 artifact，等待后台验证') ON CONFLICT (tenant_id, git, revision) DO UPDATE SET source_id = CASE WHEN plugin_publish_jobs.state = 'running' THEN plugin_publish_jobs.source_id ELSE EXCLUDED.source_id END, runtime = CASE WHEN plugin_publish_jobs.state = 'running' THEN plugin_publish_jobs.runtime ELSE EXCLUDED.runtime END, page_count = CASE WHEN plugin_publish_jobs.state = 'running' THEN plugin_publish_jobs.page_count ELSE EXCLUDED.page_count END, state = CASE WHEN plugin_publish_jobs.state = 'running' THEN 'running' ELSE 'queued' END, detail = CASE WHEN plugin_publish_jobs.state = 'running' THEN plugin_publish_jobs.detail ELSE '已持久化 artifact，等待后台验证' END, updated_at = now() RETURNING id, tenant_id, source_id, git, revision, runtime, page_count, state, detail",
+            "INSERT INTO plugin_publish_jobs (id, tenant_id, source_id, git, revision, runtime, page_count, state, detail) VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', '已持久化 artifact，等待后台验证') ON CONFLICT (tenant_id, git, revision) DO UPDATE SET source_id = CASE WHEN plugin_publish_jobs.state = 'running' THEN plugin_publish_jobs.source_id ELSE EXCLUDED.source_id END, runtime = CASE WHEN plugin_publish_jobs.state = 'running' THEN plugin_publish_jobs.runtime ELSE EXCLUDED.runtime END, page_count = CASE WHEN plugin_publish_jobs.state = 'running' THEN plugin_publish_jobs.page_count ELSE EXCLUDED.page_count END, state = CASE WHEN plugin_publish_jobs.state = 'running' THEN 'running' ELSE 'queued' END, detail = CASE WHEN plugin_publish_jobs.state = 'running' THEN plugin_publish_jobs.detail ELSE '已持久化 artifact，等待后台验证' END, request_order = nextval('plugin_publish_requests_seq'), updated_at = now() RETURNING id, tenant_id, source_id, git, revision, runtime, page_count, state, detail",
         )
         .bind(id)
         .bind(tenant_id)
@@ -137,8 +170,9 @@ impl PluginStore {
         .bind(revision)
         .bind(super::store::runtime_name(runtime))
         .bind(i32::try_from(page_count).context("发布页面数量超过数据库范围")?)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *transaction)
         .await?;
+        transaction.commit().await?;
         publish_job(row)
     }
 

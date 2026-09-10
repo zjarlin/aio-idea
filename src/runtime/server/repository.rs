@@ -13,20 +13,16 @@ use az_plugin_manifest::{
 };
 use flate2::read::GzDecoder;
 use serde_json::Value;
-use sha2::{Digest as _, Sha256};
 use tar::Archive;
 use tokio::process::Command;
 
-use super::publication_validation::{
-    ValidatedPublication, ensure_publish_capabilities, ensure_publish_runtime,
-    validate_publish_payload,
-};
+use super::publication_validation::{ensure_publish_capabilities, ensure_publish_runtime};
 #[cfg(test)]
 use super::remote_access::is_public_ip;
 use super::remote_access::{
     RemoteResolution, git_timeout, validate_git, validate_public_remote, validate_registry_source,
 };
-use crate::runtime::{MarketplaceEntry, PageDefinition, PluginRuntime, PublishPluginRequest};
+use crate::runtime::{MarketplaceEntry, PageDefinition, PluginRuntime};
 
 const MAX_ARCHIVE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_ARCHIVE_EXPANDED_BYTES: u64 = 64 * 1024 * 1024;
@@ -49,7 +45,7 @@ pub struct DiscoveredPlugin {
 
 pub struct RepositoryInstaller {
     pub(super) cache_root: PathBuf,
-    cache_operations: tokio::sync::Mutex<()>,
+    pub(super) cache_operations: tokio::sync::Mutex<()>,
 }
 
 impl RepositoryInstaller {
@@ -61,6 +57,10 @@ impl RepositoryInstaller {
     }
 
     pub async fn discover(&self, git: &str, revision: Option<&str>) -> Result<DiscoveredPlugin> {
+        ensure!(
+            !revision.is_some_and(is_package_revision),
+            "插件包内容版本必须从插件中心安装，不能作为 Git ref 拉取"
+        );
         validate_git(git)?;
         let remote = validate_public_remote(git).await?;
         let _cache_guard = self.cache_operations.lock().await;
@@ -138,94 +138,12 @@ impl RepositoryInstaller {
         finish_with_cleanup(result, &staging).await
     }
 
-    #[cfg(test)]
-    pub async fn publish(&self, request: &PublishPluginRequest) -> Result<DiscoveredPlugin> {
-        let publication = validate_publish_payload(request)?;
-        let staged = self.persist_verified_publish(request, publication).await?;
-        self.validate_published(&staged.git, &staged.revision).await
-    }
-
-    pub async fn stage_publish(&self, request: &PublishPluginRequest) -> Result<DiscoveredPlugin> {
-        let publication = validate_publish_payload(request)?;
-        let _cache_guard = self.cache_operations.lock().await;
-        self.persist_verified_publish(request, publication).await
-    }
-
-    async fn persist_verified_publish(
-        &self,
-        request: &PublishPluginRequest,
-        publication: ValidatedPublication,
-    ) -> Result<DiscoveredPlugin> {
-        let runtime = publication
-            .manifest
-            .plugin
-            .runtime
-            .as_ref()
-            .context("发布插件缺少 plugin.runtime")?;
-        tokio::fs::create_dir_all(&self.cache_root)
-            .await
-            .context("创建插件缓存目录失败")?;
-        let staging = self
-            .cache_root
-            .join(format!("staging-publish-{}", uuid::Uuid::new_v4()));
-        let result = async {
-            tokio::fs::create_dir_all(&staging).await?;
-            tokio::fs::write(staging.join("aio-plugin.toml"), &request.manifest_toml).await?;
-            let artifact_target = staging.join(&runtime.artifact);
-            let parent = artifact_target
-                .parent()
-                .context("发布 artifact 缺少父目录")?;
-            tokio::fs::create_dir_all(parent).await?;
-            tokio::fs::write(&artifact_target, &publication.artifact).await?;
-            let final_directory = self.cache_root.join(&request.rev);
-            if final_directory.exists() {
-                let existing_manifest = read_manifest(&final_directory)?;
-                ensure!(
-                    existing_manifest == publication.manifest,
-                    "同一提交 SHA 已存在不同的发布清单"
-                );
-                let existing_artifact = artifact_path(&final_directory, &runtime.artifact)?;
-                let existing_digest =
-                    format!("{:x}", Sha256::digest(std::fs::read(existing_artifact)?));
-                ensure!(
-                    existing_digest.eq_ignore_ascii_case(&request.artifact_sha256),
-                    "同一提交 SHA 已存在不同的发布 artifact"
-                );
-            } else {
-                self.ensure_cache_quota(true).await?;
-                tokio::fs::rename(&staging, &final_directory)
-                    .await
-                    .context("原子发布 artifact 缓存失败")?;
-            }
-            let pages = if runtime.kind == PluginRuntime::PageDefinition {
-                serde_json::from_slice::<Vec<PageDefinition>>(
-                    &tokio::fs::read(artifact_path(&final_directory, &runtime.artifact)?).await?,
-                )
-                .context("解析已发布 PageDefinition 失败")?
-            } else {
-                Vec::new()
-            };
-            if runtime.kind == PluginRuntime::PageDefinition {
-                validate_page_definitions(&pages)?;
-                validate_declared_pages(&publication.manifest, &pages)?;
-            }
-            Ok(DiscoveredPlugin {
-                source_id: published_source_id(&request.git),
-                git: request.git.clone(),
-                revision: request.rev.clone(),
-                runtime: runtime.kind,
-                manifest: serde_json::to_value(&publication.manifest.plugin)?,
-                pages,
-                artifact: runtime.artifact.clone(),
-            })
-        }
-        .await;
-        finish_with_cleanup(result, &staging).await
-    }
-
     pub async fn validate_published(&self, git: &str, revision: &str) -> Result<DiscoveredPlugin> {
         validate_git(git)?;
-        ensure!(is_full_revision(revision), "发布插件必须使用完整提交 SHA");
+        ensure!(
+            is_artifact_revision(revision),
+            "插件版本必须是完整 Git SHA 或插件包 SHA-256"
+        );
         let root = self.cache_root.join(revision);
         let manifest = read_manifest(&root)?;
         validate_host_compatibility(&manifest, env!("CARGO_PKG_VERSION"))?;
@@ -325,23 +243,23 @@ impl RepositoryInstaller {
 
     pub fn artifact(&self, revision: &str, relative: &str) -> Result<PathBuf> {
         ensure!(
-            revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
-            "插件 revision 必须是完整提交 SHA"
+            is_artifact_revision(revision),
+            "插件 revision 必须是完整 Git SHA 或插件包 SHA-256"
         );
         artifact_path(&self.cache_root.join(revision), relative)
     }
 
     pub fn validate_pages(&self, revision: &str, pages: &[PageDefinition]) -> Result<()> {
         ensure!(
-            revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
-            "插件 revision 必须是完整提交 SHA"
+            is_artifact_revision(revision),
+            "插件 revision 必须是完整 Git SHA 或插件包 SHA-256"
         );
         let manifest = read_manifest(&self.cache_root.join(revision))?;
         validate_page_definitions(pages)?;
         validate_declared_pages(&manifest, pages)
     }
 
-    async fn ensure_cache_quota(&self, adds_revision: bool) -> Result<()> {
+    pub(super) async fn ensure_cache_quota(&self, adds_revision: bool) -> Result<()> {
         let root = self.cache_root.clone();
         let byte_limit = environment_limit("AIO_PLUGIN_CACHE_MAX_BYTES", DEFAULT_CACHE_BYTES);
         let revision_limit = environment_limit(
@@ -388,7 +306,7 @@ fn validate_cache_quota(
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
             entry.file_type().is_ok_and(|kind| kind.is_dir())
-                && entry.file_name().to_str().is_some_and(is_full_revision)
+                && entry.file_name().to_str().is_some_and(is_artifact_revision)
         })
         .count();
     ensure!(
@@ -413,7 +331,7 @@ fn validate_cache_quota(
     Ok(())
 }
 
-async fn finish_with_cleanup<T>(result: Result<T>, directory: &Path) -> Result<T> {
+pub(super) async fn finish_with_cleanup<T>(result: Result<T>, directory: &Path) -> Result<T> {
     let cleanup = async {
         if tokio::fs::try_exists(directory).await? {
             tokio::fs::remove_dir_all(directory).await?;
@@ -471,6 +389,17 @@ fn github_archive(git: &str, revision: Option<&str>) -> Result<Option<(reqwest::
 
 pub(super) fn is_full_revision(revision: &str) -> bool {
     revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+pub(super) fn is_package_revision(revision: &str) -> bool {
+    revision.len() == 64
+        && revision
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+pub(super) fn is_artifact_revision(revision: &str) -> bool {
+    is_full_revision(revision) || is_package_revision(revision)
 }
 
 pub(super) fn published_source_id(git: &str) -> String {

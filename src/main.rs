@@ -114,7 +114,7 @@ fn App() -> dioxus::prelude::Element {
         .collect();
     rsx! {
         PluginApplication {
-            application_label: "AIO",
+            application_label: "AIO IDEA",
             pages: static_plugins.pages,
             account_items,
             runtime_pages,

@@ -8,10 +8,10 @@ Type=simple
 User=root
 Group=aio-shell
 UMask=0007
-WorkingDirectory=/opt/aio-public-shell/current
-Environment=AIO_PLUGIN_CACHE=/opt/aio-public-shell/plugin-cache
+WorkingDirectory=/opt/aio-idea/current
+Environment=AIO_PLUGIN_CACHE=/opt/aio-idea/plugin-cache
 Environment=AIO_PLUGIN_SUPERVISOR_SOCKET=/run/aio-plugin-supervisor/supervisor.sock
-ExecStart=/opt/aio-public-shell/current/aio-public-shell supervisor
+ExecStart=/opt/aio-idea/current/aio-idea supervisor
 Restart=on-failure
 RestartSec=2
 RuntimeDirectory=aio-plugin-supervisor

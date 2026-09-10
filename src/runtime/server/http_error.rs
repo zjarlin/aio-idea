@@ -38,9 +38,9 @@ impl RuntimeError {
         }
     }
 
-    pub(super) fn payload_too_large(message: impl Into<String>) -> Self {
+    pub(super) fn unavailable(message: impl Into<String>) -> Self {
         Self {
-            status: StatusCode::PAYLOAD_TOO_LARGE,
+            status: StatusCode::SERVICE_UNAVAILABLE,
             error: anyhow::anyhow!(message.into()),
         }
     }

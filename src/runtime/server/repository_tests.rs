@@ -4,90 +4,18 @@ use base64::Engine as _;
 use flate2::{Compression, write::GzEncoder};
 use std::io::Write as _;
 
-use crate::runtime::{GitProof, GitTreeProof};
+use super::super::publication_validation::validate_publish_payload;
+use az_plugin_package::PluginPackage;
+use sha2::{Digest as _, Sha256};
 
-fn with_git_proof(mut request: PublishPluginRequest) -> Result<PublishPluginRequest> {
-    let manifest = parse_manifest(&request.manifest_toml)?;
-    let artifact_path = &manifest
-        .plugin
-        .runtime
-        .as_ref()
-        .context("测试发布缺少 runtime")?
-        .artifact;
-    let artifact = base64::engine::general_purpose::STANDARD.decode(&request.artifact_base64)?;
-    let manifest_oid = super::super::git_proof::object_id("blob", request.manifest_toml.as_bytes());
-    let artifact_oid = super::super::git_proof::object_id("blob", &artifact);
-    let mut trees = Vec::new();
-    let mut root_entries = vec![("100644", "aio-plugin.toml", manifest_oid)];
-    if let Some((directory, file)) = artifact_path.split_once('/') {
-        ensure!(
-            !directory.contains('/') && !file.contains('/'),
-            "测试仅支持单层 artifact 目录"
-        );
-        let content = tree_content(&[("100644", file, artifact_oid.as_str())])?;
-        let oid = super::super::git_proof::object_id("tree", &content);
-        trees.push(GitTreeProof {
-            oid: oid.clone(),
-            content_base64: base64::engine::general_purpose::STANDARD.encode(content),
-        });
-        root_entries.push(("40000", directory, oid));
-    } else {
-        root_entries.push(("100644", artifact_path, artifact_oid));
-    }
-    root_entries.sort_by(|left, right| left.1.cmp(right.1));
-    let root_refs = root_entries
-        .iter()
-        .map(|(mode, name, oid)| (*mode, *name, oid.as_str()))
-        .collect::<Vec<_>>();
-    let root_content = tree_content(&root_refs)?;
-    let root_oid = super::super::git_proof::object_id("tree", &root_content);
-    trees.push(GitTreeProof {
-        oid: root_oid.clone(),
-        content_base64: base64::engine::general_purpose::STANDARD.encode(root_content),
-    });
-    let commit = format!(
-        "tree {root_oid}\nauthor AIO <aio@example.com> 0 +0000\ncommitter AIO <aio@example.com> 0 +0000\n\ntest\n"
-    );
-    request.rev = super::super::git_proof::object_id("commit", commit.as_bytes());
-    request.git_proof = GitProof {
-        commit_base64: base64::engine::general_purpose::STANDARD.encode(commit),
-        trees,
-    };
-    Ok(request)
-}
-
-fn empty_git_proof() -> GitProof {
-    GitProof {
-        commit_base64: String::new(),
-        trees: Vec::new(),
-    }
-}
-
-fn proof_test_request(artifact: &[u8]) -> PublishPluginRequest {
-    PublishPluginRequest {
-        git: "https://github.com/example/plugin.git".to_owned(),
-        rev: "0".repeat(40),
-        manifest_toml: "[plugin.runtime]\nkind = 'page-definition'\nartifact = 'dist/pages.json'\n\n[plugin.marketplace]\ntitle = 'Pages'\nsummary = 'Pages'\nlicense = 'MIT'\ntags = ['test']\n".to_owned(),
-        artifact_base64: base64::engine::general_purpose::STANDARD.encode(artifact),
-        artifact_sha256: format!("{:x}", Sha256::digest(artifact)),
-        git_proof: empty_git_proof(),
-        tenant_id: None,
-    }
-}
-
-fn tree_content(entries: &[(&str, &str, &str)]) -> Result<Vec<u8>> {
-    let mut content = Vec::new();
-    for (mode, name, oid) in entries {
-        content.extend_from_slice(mode.as_bytes());
-        content.push(b' ');
-        content.extend_from_slice(name.as_bytes());
-        content.push(0);
-        ensure!(oid.len() == 40, "测试 Git oid 长度无效");
-        for index in (0..oid.len()).step_by(2) {
-            content.push(u8::from_str_radix(&oid[index..index + 2], 16)?);
-        }
-    }
-    Ok(content)
+fn package_test_request(artifact: &[u8]) -> Result<PluginPackage> {
+    PluginPackage::new(
+        "https://github.com/example/plugin.git".to_owned(),
+        "1.0.0".to_owned(),
+        None,
+        "[plugin.runtime]\nkind = 'page-definition'\nartifact = 'dist/pages.json'\n\n[plugin.marketplace]\ntitle = 'Pages'\nsummary = 'Pages'\nlicense = 'MIT'\ntags = ['test']\n".to_owned(),
+        artifact,
+    )
 }
 
 #[test]
@@ -202,26 +130,26 @@ fn published_source_identity_is_a_supervisor_safe_uuid() -> Result<()> {
 }
 
 #[test]
-fn accepts_valid_offline_git_proof() -> Result<()> {
-    let request = with_git_proof(proof_test_request(b"[]"))?;
+fn accepts_binary_package_without_git_proof() -> Result<()> {
+    let request = package_test_request(b"[]")?;
 
     validate_publish_payload(&request)?;
     Ok(())
 }
 
 #[test]
-fn rejects_artifact_tampered_after_git_proof() -> Result<()> {
-    let mut request = with_git_proof(proof_test_request(b"[]"))?;
+fn rejects_artifact_tampered_after_packaging() -> Result<()> {
+    let mut request = package_test_request(b"[]")?;
     let forged = br#"[{"forged":true}]"#;
     request.artifact_base64 = base64::engine::general_purpose::STANDARD.encode(forged);
     request.artifact_sha256 = format!("{:x}", Sha256::digest(forged));
 
     let error = match validate_publish_payload(&request) {
-        Ok(_) => panic!("不属于 Git commit 的 artifact 必须被拒绝"),
+        Ok(_) => panic!("内容摘要不一致的 artifact 必须被拒绝"),
         Err(error) => error,
     };
 
-    assert!(error.to_string().contains("Git commit 路径不一致"));
+    assert!(error.to_string().contains("内容版本"));
     Ok(())
 }
 
@@ -319,10 +247,11 @@ async fn rejects_a_hexadecimal_ref_that_points_to_another_commit() -> Result<()>
 #[tokio::test]
 async fn publishes_validated_page_definition_artifact() -> Result<()> {
     let artifact = br#"[{"id":"published-page","label":"Published","icon":"box","scene":{"id":"community","label":"Community"},"required_permission":null,"body":{"kind":"text","title":"Published","content":"from CI"}}]"#;
-    let request = with_git_proof(PublishPluginRequest {
-        git: "https://github.com/example/aio-plugin-published.git".to_owned(),
-        rev: "a".repeat(40),
-        manifest_toml: r#"
+    let request = PluginPackage::new(
+        "https://github.com/example/aio-plugin-published.git".to_owned(),
+        "1.0.0".to_owned(),
+        None,
+        r#"
 [plugin.runtime]
 kind = "page-definition"
 artifact = "dist/pages.json"
@@ -343,11 +272,8 @@ id = "published"
 pages = ["published-page"]
 "#
         .to_owned(),
-        artifact_base64: base64::engine::general_purpose::STANDARD.encode(artifact),
-        artifact_sha256: format!("{:x}", Sha256::digest(artifact)),
-        git_proof: empty_git_proof(),
-        tenant_id: None,
-    })?;
+        artifact,
+    )?;
     let temporary = tempfile::tempdir()?;
     let installer = RepositoryInstaller::new(temporary.path().join("cache"));
 
@@ -366,10 +292,11 @@ pages = ["published-page"]
 #[tokio::test]
 async fn publishes_validated_process_artifact() -> Result<()> {
     let artifact = b"committed process artifact";
-    let request = with_git_proof(PublishPluginRequest {
-        git: "https://github.com/example/aio-plugin-process.git".to_owned(),
-        rev: "c".repeat(40),
-        manifest_toml: r#"
+    let request = PluginPackage::new(
+        "https://github.com/example/aio-plugin-process.git".to_owned(),
+        "1.0.0".to_owned(),
+        None,
+        r#"
 [plugin.runtime]
 kind = "process"
 artifact = "dist/plugin.jar"
@@ -391,11 +318,8 @@ filesystem = []
 database = false
 "#
         .to_owned(),
-        artifact_base64: base64::engine::general_purpose::STANDARD.encode(artifact),
-        artifact_sha256: format!("{:x}", Sha256::digest(artifact)),
-        git_proof: empty_git_proof(),
-        tenant_id: None,
-    })?;
+        artifact,
+    )?;
     let temporary = tempfile::tempdir()?;
     let installer = RepositoryInstaller::new(temporary.path().join("cache"));
 
@@ -413,16 +337,8 @@ database = false
 
 #[tokio::test]
 async fn rejects_published_artifact_with_mismatched_digest() -> Result<()> {
-    let request = PublishPluginRequest {
-        git: "https://github.com/example/aio-plugin-published.git".to_owned(),
-        rev: "b".repeat(40),
-        manifest_toml: "[plugin.runtime]\nkind = 'page-definition'\nartifact = 'pages.json'"
-            .to_owned(),
-        artifact_base64: base64::engine::general_purpose::STANDARD.encode(b"[]"),
-        artifact_sha256: "0".repeat(64),
-        git_proof: empty_git_proof(),
-        tenant_id: None,
-    };
+    let mut request = package_test_request(b"[]")?;
+    request.artifact_base64 = base64::engine::general_purpose::STANDARD.encode(b"[1]");
     let temporary = tempfile::tempdir()?;
     let installer = RepositoryInstaller::new(temporary.path().join("cache"));
 
@@ -431,6 +347,6 @@ async fn rejects_published_artifact_with_mismatched_digest() -> Result<()> {
         Err(error) => error,
     };
 
-    assert!(error.to_string().contains("SHA-256 不匹配"));
+    assert!(error.to_string().contains("SHA-256"));
     Ok(())
 }

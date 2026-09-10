@@ -3,10 +3,10 @@ use az_plugin_manifest::PluginManifest;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 
-use super::{page_state, repository::DiscoveredPlugin, supervisor::ProcessInstance};
+use super::{page_state, supervisor::ProcessInstance};
 use crate::runtime::{
-    InstalledPluginView, MarketplaceEntry, PageDefinition, PluginLifecycleEvent, PluginRuntime,
-    PluginState, RuntimeAccountItem, RuntimeCatalog, TenantView, UserView,
+    InstalledPluginView, PageDefinition, PluginLifecycleEvent, PluginRuntime, PluginState,
+    RuntimeAccountItem, RuntimeCatalog, TenantView, UserView,
 };
 
 const SCHEMA: &str = r#"
@@ -124,6 +124,7 @@ impl PluginStore {
             .context("创建插件运行时表失败")?;
         super::marketplace_store::migrate(&self.pool).await?;
         super::publisher_store::migrate(&self.pool).await?;
+        super::package_store::migrate(&self.pool).await?;
         page_state::migrate(&self.pool).await?;
         self.migrate_published_source_ids().await?;
         Ok(())
@@ -191,68 +192,6 @@ impl PluginStore {
                 })
             })
             .collect()
-    }
-
-    pub async fn activate(
-        &self,
-        tenant_id: &str,
-        plugin: DiscoveredPlugin,
-        instance: Option<&ProcessInstance>,
-        publication: Option<&MarketplaceEntry>,
-    ) -> Result<()> {
-        let mut transaction = self.pool.begin().await?;
-        sqlx::query(
-            "INSERT INTO plugin_sources (id, git) VALUES ($1, $2) ON CONFLICT (git) DO UPDATE SET git = EXCLUDED.git",
-        )
-        .bind(&plugin.source_id)
-        .bind(&plugin.git)
-        .execute(&mut *transaction)
-        .await?;
-        let source_id =
-            sqlx::query_scalar::<_, String>("SELECT id FROM plugin_sources WHERE git = $1")
-                .bind(&plugin.git)
-                .fetch_one(&mut *transaction)
-                .await?;
-        let requested_revision_id = format!("{source_id}:{}", plugin.revision);
-        let revision_id = sqlx::query_scalar::<_, String>(
-            "INSERT INTO plugin_revisions (id, source_id, revision, runtime, manifest, pages) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (source_id, revision) DO UPDATE SET manifest = EXCLUDED.manifest, pages = EXCLUDED.pages RETURNING id",
-        )
-        .bind(&requested_revision_id)
-        .bind(&source_id)
-        .bind(&plugin.revision)
-        .bind(runtime_name(plugin.runtime))
-        .bind(&plugin.manifest)
-        .bind(serde_json::to_value(&plugin.pages)?)
-        .fetch_one(&mut *transaction)
-        .await?;
-        sqlx::query(
-            "INSERT INTO tenant_plugin_bindings (tenant_id, source_id, revision_id, enabled) VALUES ($1, $2, $3, TRUE) ON CONFLICT (tenant_id, source_id) DO UPDATE SET revision_id = EXCLUDED.revision_id, enabled = TRUE, updated_at = now()",
-        )
-        .bind(tenant_id)
-        .bind(&source_id)
-        .bind(&revision_id)
-        .execute(&mut *transaction)
-        .await?;
-        stop_instances(&mut transaction, tenant_id, &source_id).await?;
-        start_instance(&mut transaction, tenant_id, &revision_id, instance).await?;
-        record_event(
-            &mut transaction,
-            tenant_id,
-            &source_id,
-            Some(&revision_id),
-            "activate",
-            "健康检查通过并原子激活",
-        )
-        .await?;
-        if let Some(publication) = publication {
-            super::marketplace_store::upsert_published_marketplace_entry(
-                &mut transaction,
-                publication,
-            )
-            .await?;
-        }
-        transaction.commit().await?;
-        Ok(())
     }
 
     pub async fn catalog(
@@ -727,7 +666,7 @@ fn runtime_account_items(
     Ok(items)
 }
 
-async fn record_event(
+pub(super) async fn record_event(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant_id: &str,
     source_id: &str,
@@ -741,7 +680,7 @@ async fn record_event(
     Ok(())
 }
 
-async fn stop_instances(
+pub(super) async fn stop_instances(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant_id: &str,
     source_id: &str,
@@ -751,7 +690,7 @@ async fn stop_instances(
     Ok(())
 }
 
-async fn start_instance(
+pub(super) async fn start_instance(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant_id: &str,
     revision_id: &str,

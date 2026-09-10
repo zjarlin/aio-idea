@@ -27,6 +27,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "aio-idea"
+version = "2026.9.11"
+dependencies = [
+ "aio-plugin-account",
+ "aio-plugin-identity-client",
+ "aio-plugin-identity-server",
+ "aio-plugin-marketplace-client",
+ "aio-plugin-marketplace-server",
+ "aio-plugin-rbac-client",
+ "aio-plugin-rbac-server",
+ "aio-plugin-settings",
+ "aio-plugin-tenant-client",
+ "aio-plugin-tenant-server",
+ "anyhow",
+ "axum",
+ "az-dioxus-admin-shell",
+ "az-plugin-manifest",
+ "az-plugin-package",
+ "az-ui-components",
+ "base64",
+ "dill",
+ "dioxus",
+ "flate2",
+ "gloo-net",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tar",
+ "tempfile",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "tower-http",
+ "uuid",
+ "wasmtime",
+ "web-sys",
+]
+
+[[package]]
 name = "aio-plugin-account"
 version = "0.1.0"
 source = "git+https://github.com/zjarlin/aio-plugin-account.git?rev=c6a5cd3383de1a9a260f1ca76a71fe8a4f13f707#c6a5cd3383de1a9a260f1ca76a71fe8a4f13f707"
@@ -185,46 +225,6 @@ dependencies = [
  "dill",
  "sqlx",
  "uuid",
-]
-
-[[package]]
-name = "aio-public-shell"
-version = "2026.9.11"
-dependencies = [
- "aio-plugin-account",
- "aio-plugin-identity-client",
- "aio-plugin-identity-server",
- "aio-plugin-marketplace-client",
- "aio-plugin-marketplace-server",
- "aio-plugin-rbac-client",
- "aio-plugin-rbac-server",
- "aio-plugin-settings",
- "aio-plugin-tenant-client",
- "aio-plugin-tenant-server",
- "anyhow",
- "axum",
- "az-dioxus-admin-shell",
- "az-plugin-manifest",
- "az-ui-components",
- "base64",
- "dill",
- "dioxus",
- "flate2",
- "gloo-net",
- "reqwest",
- "serde",
- "serde_json",
- "sha1_smol",
- "sha2",
- "sqlx",
- "tar",
- "tempfile",
- "tokio",
- "toml 0.9.12+spec-1.1.0",
- "tower-http",
- "uuid",
- "wasmtime",
- "web-sys",
 ]
 
 [[package]]
@@ -525,7 +525,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-manifest"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio.git?rev=68ab02d1b65928b011f764b114d69e9d8ed9ee20#68ab02d1b65928b011f764b114d69e9d8ed9ee20"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=244b30bce587f0b87ca7b0fbc70960dea2fe7388#244b30bce587f0b87ca7b0fbc70960dea2fe7388"
 dependencies = [
  "anyhow",
  "semver",
@@ -535,6 +535,22 @@ dependencies = [
  "wasmtime",
  "wit-component 0.244.0",
  "wit-parser 0.244.0",
+]
+
+[[package]]
+name = "az-plugin-package"
+version = "2026.5.10"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=244b30bce587f0b87ca7b0fbc70960dea2fe7388#244b30bce587f0b87ca7b0fbc70960dea2fe7388"
+dependencies = [
+ "anyhow",
+ "az-plugin-manifest",
+ "base64",
+ "flate2",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "url",
 ]
 
 [[package]]

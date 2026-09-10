@@ -1,5 +1,5 @@
 tunnel: 4be41351-a4ef-4ce2-9ef2-f573946fcfcf
-credentials-file: /opt/aio-public-shell/cloudflared/credentials.json
+credentials-file: /opt/aio-idea/cloudflared/credentials.json
 protocol: quic
 metrics: 127.0.0.1:20243
 

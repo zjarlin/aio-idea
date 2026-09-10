@@ -7,8 +7,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, delete, get, post},
 };
-use flate2::read::MultiGzDecoder;
-use std::io::Read;
 
 use super::{
     RuntimeState,
@@ -20,6 +18,7 @@ use super::{
     },
     management::{add_registry, create_publish_credential, revoke_publish_credential},
     marketplace_store::PUBLISHED_REGISTRY_SOURCE,
+    publication::{authorize_upload, download_package, publish},
     request_context::{
         authenticate, authenticate_manager, authenticate_publisher, authorize_publish_target,
         catalog_for, catalog_value, permitted,
@@ -27,11 +26,8 @@ use super::{
 };
 use crate::runtime::{
     InstallPluginRequest, MarketplaceEntry, PageActionRequest, PageActionResult, PageBody,
-    PageDefinition, PluginRequest, PublishPluginRequest, PublishState, PublishedPluginView,
-    RuntimeCatalog, RuntimeResponse,
+    PageDefinition, PluginRequest, PublishedPluginView, RuntimeCatalog, RuntimeResponse,
 };
-
-const MAX_PUBLISH_BODY_BYTES: usize = 52 * 1024 * 1024;
 
 pub fn router(state: RuntimeState) -> Router {
     Router::new()
@@ -43,8 +39,14 @@ pub fn router(state: RuntimeState) -> Router {
         .route("/api/runtime/publish-jobs/{job_id}", get(publish_job))
         .route(
             "/api/runtime/plugins/publish",
-            post(publish).layer(DefaultBodyLimit::max(MAX_PUBLISH_BODY_BYTES)),
+            post(publish)
+                .layer(DefaultBodyLimit::max(az_plugin_package::MAX_PACKAGE_BYTES))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    authorize_upload,
+                )),
         )
+        .route("/api/runtime/packages/{revision}", get(download_package))
         .route(
             "/api/runtime/publish-credentials",
             post(create_publish_credential),
@@ -217,144 +219,6 @@ async fn install(
     let session = authenticate_manager(&state, &headers).await?;
     super::installation::install(&state, &session.tenant_id, &request).await?;
     catalog_for(&state, &session).await
-}
-
-async fn publish(
-    State(state): State<RuntimeState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Json<RuntimeResponse<PublishedPluginView>>, RuntimeError> {
-    ensure_publish_content_type(&headers)?;
-    let publisher = authenticate_publisher(&state, &headers).await?;
-    let body = tokio::task::spawn_blocking(move || decode_publish_body(&headers, &body))
-        .await
-        .map_err(|error| RuntimeError::bad_request(format!("等待发布请求解压失败: {error}")))??;
-    let request: PublishPluginRequest = serde_json::from_slice(&body)
-        .map_err(|error| RuntimeError::bad_request(format!("发布请求 JSON 无效: {error}")))?;
-    drop(body);
-    let tenant_id =
-        authorize_publish_target(publisher, &request.git, request.tenant_id.as_deref())?;
-    let staged = state.repository.stage_publish(&request).await?;
-    let source_id = state
-        .store
-        .source_id(&request.git)
-        .await?
-        .unwrap_or(staged.source_id.clone());
-    let job = state
-        .store
-        .queue_publish_job(
-            &tenant_id,
-            &source_id,
-            &request.git,
-            &request.rev,
-            staged.runtime,
-            staged.pages.len(),
-        )
-        .await?;
-    let _ = state
-        .store
-        .record_lifecycle_event(
-            &tenant_id,
-            &source_id,
-            None,
-            "publish-queued",
-            "已持久化 artifact，后台验证完成后原子激活",
-        )
-        .await;
-    if job.state == PublishState::Queued {
-        state.start_publish_job(job.clone());
-    }
-    Ok(Json(RuntimeResponse {
-        data: PublishedPluginView {
-            job_id: job.id,
-            tenant_id,
-            source_id,
-            revision: request.rev,
-            runtime: staged.runtime,
-            page_count: staged.pages.len(),
-            state: job.state,
-            detail: job.detail,
-        },
-    }))
-}
-
-fn decode_publish_body(headers: &HeaderMap, body: &Bytes) -> Result<Vec<u8>, RuntimeError> {
-    decode_publish_body_with_limit(headers, body, MAX_PUBLISH_BODY_BYTES)
-}
-
-fn decode_publish_body_with_limit(
-    headers: &HeaderMap,
-    body: &Bytes,
-    max_bytes: usize,
-) -> Result<Vec<u8>, RuntimeError> {
-    let mut encodings = headers
-        .get_all(header::CONTENT_ENCODING)
-        .iter()
-        .map(|value| {
-            value
-                .to_str()
-                .map_err(|_| RuntimeError::unsupported_media_type("发布请求 Content-Encoding 无效"))
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flat_map(|value| value.split(','))
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let encoding = encodings.next();
-    if encodings.next().is_some() {
-        return Err(RuntimeError::unsupported_media_type(
-            "发布请求只允许一种 Content-Encoding",
-        ));
-    }
-    match encoding {
-        None => Ok(body.to_vec()),
-        Some(value) if value.eq_ignore_ascii_case("identity") => Ok(body.to_vec()),
-        Some(value) if value.eq_ignore_ascii_case("gzip") => {
-            let decoder = MultiGzDecoder::new(body.as_ref());
-            let mut decoded = Vec::new();
-            decoder
-                .take((max_bytes + 1) as u64)
-                .read_to_end(&mut decoded)
-                .map_err(|error| {
-                    RuntimeError::bad_request(format!("发布请求 gzip 解压失败: {error}"))
-                })?;
-            if decoded.len() > max_bytes {
-                return Err(RuntimeError::payload_too_large(
-                    "发布请求解压后超过大小限制",
-                ));
-            }
-            Ok(decoded)
-        }
-        Some(_) => Err(RuntimeError::unsupported_media_type(
-            "发布请求只支持 identity 或 gzip Content-Encoding",
-        )),
-    }
-}
-
-fn ensure_publish_content_type(headers: &HeaderMap) -> Result<(), RuntimeError> {
-    let Some(content_type) = headers.get(header::CONTENT_TYPE) else {
-        return Err(RuntimeError::unsupported_media_type(
-            "发布请求必须声明 application/json Content-Type",
-        ));
-    };
-    let content_type = content_type
-        .to_str()
-        .map_err(|_| RuntimeError::unsupported_media_type("发布请求 Content-Type 无效"))?
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim();
-    let is_json = content_type.eq_ignore_ascii_case("application/json")
-        || content_type
-            .to_ascii_lowercase()
-            .strip_prefix("application/")
-            .is_some_and(|subtype| subtype.ends_with("+json"));
-    if !is_json {
-        return Err(RuntimeError::unsupported_media_type(
-            "发布请求必须使用 application/json Content-Type",
-        ));
-    }
-    Ok(())
 }
 
 async fn publish_job(

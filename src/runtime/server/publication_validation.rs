@@ -1,72 +1,26 @@
-use std::env;
-
 use anyhow::{Context as _, Result, ensure};
-use az_plugin_manifest::{parse_manifest, read_manifest, validate_host_compatibility};
-use base64::Engine as _;
-use sha2::{Digest as _, Sha256};
+use az_plugin_manifest::{read_manifest, validate_host_compatibility};
+use az_plugin_package::{PluginPackage, VerifiedPluginPackage};
 
 use super::{
-    git_proof,
     remote_access::validate_git,
-    repository::{RepositoryInstaller, is_full_revision},
+    repository::{RepositoryInstaller, is_artifact_revision},
 };
-use crate::runtime::{MarketplaceEntry, PluginRuntime, PublishPluginRequest};
+use crate::runtime::{MarketplaceEntry, PluginRuntime};
 
-const MAX_PUBLISHED_ARTIFACT_BYTES: usize = 32 * 1024 * 1024;
-const MAX_PUBLISHED_MANIFEST_BYTES: usize = 128 * 1024;
-
-pub(super) struct ValidatedPublication {
-    pub manifest: az_plugin_manifest::RepositoryManifest,
-    pub artifact: Vec<u8>,
-}
-
-pub(super) fn validate_publish_payload(
-    request: &PublishPluginRequest,
-) -> Result<ValidatedPublication> {
-    validate_git(&request.git)?;
-    ensure!(
-        is_full_revision(&request.rev),
-        "发布插件必须使用完整提交 SHA"
-    );
-    ensure!(
-        request.manifest_toml.len() <= MAX_PUBLISHED_MANIFEST_BYTES,
-        "发布插件清单不能超过 {MAX_PUBLISHED_MANIFEST_BYTES} 字节"
-    );
-    ensure!(
-        request.artifact_sha256.len() == 64
-            && request
-                .artifact_sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit()),
-        "artifact_sha256 必须是完整 SHA-256"
-    );
-    let artifact = base64::engine::general_purpose::STANDARD
-        .decode(&request.artifact_base64)
-        .context("发布 artifact 不是有效 Base64")?;
-    ensure!(
-        artifact.len() <= MAX_PUBLISHED_ARTIFACT_BYTES,
-        "发布 artifact 不能超过 {MAX_PUBLISHED_ARTIFACT_BYTES} 字节"
-    );
-    let actual_digest = format!("{:x}", Sha256::digest(&artifact));
-    ensure!(
-        actual_digest.eq_ignore_ascii_case(&request.artifact_sha256),
-        "发布 artifact SHA-256 不匹配"
-    );
-    let manifest = parse_manifest(&request.manifest_toml)?;
-    validate_host_compatibility(&manifest, env!("CARGO_PKG_VERSION"))?;
-    ensure!(
-        manifest.plugin.marketplace.is_some(),
-        "在线发布插件必须声明 [plugin.marketplace]"
-    );
-    let runtime = manifest
+pub(super) fn validate_publish_payload(package: &PluginPackage) -> Result<VerifiedPluginPackage> {
+    let verified = package.verify()?;
+    validate_git(&package.git)?;
+    validate_host_compatibility(&verified.manifest, env!("CARGO_PKG_VERSION"))?;
+    let runtime = verified
+        .manifest
         .plugin
         .runtime
         .as_ref()
-        .context("发布插件缺少 plugin.runtime")?;
+        .context("插件包缺少运行目标")?;
     ensure_publish_runtime(runtime.kind)?;
-    ensure_publish_capabilities(&manifest)?;
-    git_proof::verify(request, &manifest, &artifact)?;
-    Ok(ValidatedPublication { manifest, artifact })
+    ensure_publish_capabilities(&verified.manifest)?;
+    Ok(verified)
 }
 
 pub(super) fn ensure_publish_runtime(runtime: PluginRuntime) -> Result<()> {
@@ -75,7 +29,7 @@ pub(super) fn ensure_publish_runtime(runtime: PluginRuntime) -> Result<()> {
             runtime,
             PluginRuntime::PageDefinition | PluginRuntime::WasmComponent | PluginRuntime::Process
         ),
-        "发布接口只接受 page-definition、wasm-component 或 process artifact"
+        "发布接口只接受独立运行的 page-definition、wasm-component 或 process 产物"
     );
     Ok(())
 }
@@ -100,7 +54,10 @@ impl RepositoryInstaller {
         revision: &str,
     ) -> Result<MarketplaceEntry> {
         validate_git(git)?;
-        ensure!(is_full_revision(revision), "发布插件必须使用完整提交 SHA");
+        ensure!(
+            is_artifact_revision(revision),
+            "插件版本必须是完整 Git SHA 或插件包 SHA-256"
+        );
         let manifest = read_manifest(&self.cache_root.join(revision))?;
         let metadata = manifest
             .plugin

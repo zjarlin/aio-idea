@@ -26,16 +26,12 @@ pub(super) async fn install(
         .published_marketplace_entry(&request.git, request.rev.as_deref())
         .await
         .context("查找数据库已发布插件失败")?;
+    if let Some(publication) = &publication {
+        state.restore_package_cache(&publication.rev).await?;
+    }
     let (discovered, validation_detail) =
         resolve_install_candidate(&state.repository, request, publication.as_ref()).await?;
-    activate(
-        state,
-        tenant_id,
-        discovered,
-        validation_detail,
-        publication.as_ref(),
-    )
-    .await
+    activate(state, tenant_id, discovered, validation_detail, None).await
 }
 
 async fn resolve_install_candidate(

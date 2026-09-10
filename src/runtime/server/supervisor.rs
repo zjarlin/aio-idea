@@ -63,7 +63,7 @@ pub async fn run() -> Result<()> {
         .unwrap_or_else(|| PathBuf::from("/run/aio-plugin-supervisor/supervisor.sock"));
     let cache_root = env::var_os("AIO_PLUGIN_CACHE")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/opt/aio-public-shell/plugin-cache"));
+        .unwrap_or_else(|| PathBuf::from("/opt/aio-idea/plugin-cache"));
     if let Some(parent) = socket.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -287,12 +287,8 @@ fn validate_start_request(request: &StartProcessRequest) -> Result<()> {
     );
     uuid::Uuid::parse_str(&request.source_id).context("插件来源 id 必须是 UUID")?;
     ensure!(
-        request.revision.len() == 40
-            && request
-                .revision
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit()),
-        "插件 revision 必须是完整提交 SHA"
+        super::repository::is_artifact_revision(&request.revision),
+        "插件 revision 必须是完整 Git SHA 或插件包 SHA-256"
     );
     Ok(())
 }
@@ -560,6 +556,39 @@ mod tests {
         second.tenant_id = "another".to_owned();
         assert_eq!(instance_id(&first), instance_id(&first));
         assert_ne!(instance_id(&first), instance_id(&second));
+    }
+
+    #[test]
+    fn accepts_full_package_revisions_without_allowing_cache_path_traversal() {
+        let mut request = StartProcessRequest {
+            tenant_id: "default".to_owned(),
+            source_id: "78e88a28-1c20-4f96-b486-a242d4cb28c0".to_owned(),
+            revision: "abcdef01".repeat(8),
+        };
+        assert!(validate_start_request(&request).is_ok());
+        let package_instance = instance_id(&request);
+        request.revision = "abcdef01".repeat(5);
+        assert!(validate_start_request(&request).is_ok());
+        assert_ne!(instance_id(&request), package_instance);
+
+        for revision in [
+            String::new(),
+            "a".repeat(63),
+            "a".repeat(65),
+            "A".repeat(64),
+            "g".repeat(64),
+            format!("../{}", "a".repeat(64)),
+            format!("/{}", "a".repeat(64)),
+            format!("{}\\..\\outside", "a".repeat(64)),
+            format!("{}%2f..%2foutside", "a".repeat(64)),
+        ] {
+            request.revision = revision;
+            assert!(
+                validate_start_request(&request).is_err(),
+                "invalid cache revision was accepted: {:?}",
+                request.revision
+            );
+        }
     }
 
     #[test]

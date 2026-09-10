@@ -94,36 +94,6 @@ pub struct InstallPluginRequest {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg(feature = "server")]
 #[serde(deny_unknown_fields)]
-pub struct GitTreeProof {
-    pub oid: String,
-    pub content_base64: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[cfg(feature = "server")]
-#[serde(deny_unknown_fields)]
-pub struct GitProof {
-    pub commit_base64: String,
-    pub trees: Vec<GitTreeProof>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[cfg(feature = "server")]
-#[serde(deny_unknown_fields)]
-pub struct PublishPluginRequest {
-    pub git: String,
-    pub rev: String,
-    pub manifest_toml: String,
-    pub artifact_base64: String,
-    pub artifact_sha256: String,
-    pub git_proof: GitProof,
-    #[serde(default)]
-    pub tenant_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[cfg(feature = "server")]
-#[serde(deny_unknown_fields)]
 pub struct CreatePublishCredentialRequest {
     pub git: String,
 }

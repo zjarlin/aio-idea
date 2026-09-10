@@ -25,7 +25,7 @@ pub async fn run() -> Result<()> {
         .context("AIO_WEB_HOST 必须是有效 IP 地址")?;
     let web_dist = env::var_os("AIO_WEB_DIST")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("target/dx/aio-public-shell/release/web/public"));
+        .unwrap_or_else(|| PathBuf::from("target/dx/aio-idea/release/web/public"));
     let index = web_dist.join("index.html");
     let application = ServeDir::new(web_dist).fallback(ServeFile::new(index));
     let plugin_catalog = plugins::server_catalog()?;
@@ -45,10 +45,10 @@ pub async fn run() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .with_context(|| format!("绑定监听地址失败: {address}"))?;
-    println!("AIO listening on http://{}", listener.local_addr()?);
+    println!("AIO IDEA listening on http://{}", listener.local_addr()?);
     axum::serve(listener, router)
         .await
-        .context("AIO 服务异常退出")
+        .context("AIO IDEA 服务异常退出")
 }
 
 async fn api_not_found() -> (StatusCode, Json<serde_json::Value>) {
