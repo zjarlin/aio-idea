@@ -44,6 +44,11 @@ pub(super) struct PublishJob {
     pub state: PublishState,
 }
 
+pub(super) struct PublisherBinding {
+    pub tenant_id: String,
+    pub git: String,
+}
+
 pub(super) async fn migrate(pool: &PgPool) -> Result<()> {
     sqlx::raw_sql(SCHEMA)
         .execute(pool)
@@ -82,15 +87,17 @@ impl PluginStore {
         })
     }
 
-    pub(super) async fn publisher_tenant(&self, git: &str, token: &str) -> Result<Option<String>> {
-        sqlx::query_scalar(
-            "SELECT tenant_id FROM plugin_publish_credentials WHERE git = $1 AND token_hash = $2 AND revoked_at IS NULL",
+    pub(super) async fn publisher_binding(&self, token: &str) -> Result<Option<PublisherBinding>> {
+        let row = sqlx::query(
+            "SELECT tenant_id, git FROM plugin_publish_credentials WHERE token_hash = $1 AND revoked_at IS NULL",
         )
-        .bind(git)
         .bind(token_hash(token))
         .fetch_optional(&self.pool)
-        .await
-        .map_err(Into::into)
+        .await?;
+        Ok(row.map(|row| PublisherBinding {
+            tenant_id: row.get("tenant_id"),
+            git: row.get("git"),
+        }))
     }
 
     pub(super) async fn revoke_publish_credential(

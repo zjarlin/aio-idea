@@ -37,6 +37,20 @@ impl RuntimeError {
             error: anyhow::anyhow!(message.into()),
         }
     }
+
+    pub(super) fn payload_too_large(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            error: anyhow::anyhow!(message.into()),
+        }
+    }
+
+    pub(super) fn unsupported_media_type(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            error: anyhow::anyhow!(message.into()),
+        }
+    }
 }
 
 impl<E> From<E> for RuntimeError

@@ -35,29 +35,49 @@ pub(super) async fn authenticate_manager(
     Ok(session)
 }
 
-pub(super) async fn publisher_tenant(
+pub(super) struct PublisherContext {
+    tenant_id: String,
+    git: Option<String>,
+}
+
+pub(super) async fn authenticate_publisher(
     state: &RuntimeState,
     headers: &HeaderMap,
+) -> Result<PublisherContext, RuntimeError> {
+    if let Some(token) = bearer_token(headers) {
+        let binding = state
+            .store
+            .publisher_binding(token)
+            .await?
+            .ok_or_else(|| RuntimeError::unauthorized("发布令牌无效或已撤销"))?;
+        return Ok(PublisherContext {
+            tenant_id: binding.tenant_id,
+            git: Some(binding.git),
+        });
+    }
+    let session = authenticate_manager(state, headers).await?;
+    Ok(PublisherContext {
+        tenant_id: session.tenant_id,
+        git: None,
+    })
+}
+
+pub(super) fn authorize_publish_target(
+    publisher: PublisherContext,
     git: &str,
     requested_tenant: Option<&str>,
 ) -> Result<String, RuntimeError> {
-    if let Some(token) = bearer_token(headers)
-        && let Some(tenant_id) = state.store.publisher_tenant(git, token).await?
+    if let Some(credential_git) = publisher.git
+        && credential_git != git
     {
-        if let Some(requested_tenant) = requested_tenant
-            && requested_tenant != tenant_id
-        {
-            return Err(RuntimeError::forbidden("发布令牌不能切换目标租户"));
-        }
-        return Ok(tenant_id);
+        return Err(RuntimeError::forbidden("发布令牌不能更新其他 Git 来源"));
     }
-    let session = authenticate_manager(state, headers).await?;
     if let Some(requested_tenant) = requested_tenant
-        && requested_tenant != session.tenant_id
+        && requested_tenant != publisher.tenant_id
     {
         return Err(RuntimeError::forbidden("当前会话不能向其他租户发布插件"));
     }
-    Ok(session.tenant_id)
+    Ok(publisher.tenant_id)
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
@@ -111,4 +131,38 @@ pub(super) async fn catalog_value(
 pub(super) fn permitted(required_permission: Option<&str>, permissions: &[String]) -> bool {
     required_permission
         .is_none_or(|permission| permissions.iter().any(|candidate| candidate == permission))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publish_credential_is_bound_to_git_and_tenant() {
+        let publisher = PublisherContext {
+            tenant_id: "tenant-a".to_owned(),
+            git: Some("https://github.com/example/plugin.git".to_owned()),
+        };
+        assert!(
+            authorize_publish_target(
+                publisher,
+                "https://github.com/example/other.git",
+                Some("tenant-a"),
+            )
+            .is_err()
+        );
+
+        let publisher = PublisherContext {
+            tenant_id: "tenant-a".to_owned(),
+            git: Some("https://github.com/example/plugin.git".to_owned()),
+        };
+        assert!(
+            authorize_publish_target(
+                publisher,
+                "https://github.com/example/plugin.git",
+                Some("tenant-b"),
+            )
+            .is_err()
+        );
+    }
 }

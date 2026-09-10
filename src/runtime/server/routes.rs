@@ -22,7 +22,8 @@ use super::{
     marketplace_store::PUBLISHED_REGISTRY_SOURCE,
     repository::validate_git,
     request_context::{
-        authenticate, authenticate_manager, catalog_for, catalog_value, permitted, publisher_tenant,
+        authenticate, authenticate_manager, authenticate_publisher, authorize_publish_target,
+        catalog_for, catalog_value, permitted,
     },
 };
 use crate::runtime::{
@@ -234,11 +235,16 @@ async fn publish(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<RuntimeResponse<PublishedPluginView>>, RuntimeError> {
-    let body = decode_publish_body(&headers, &body)?;
+    ensure_publish_content_type(&headers)?;
+    let publisher = authenticate_publisher(&state, &headers).await?;
+    let body = tokio::task::spawn_blocking(move || decode_publish_body(&headers, &body))
+        .await
+        .map_err(|error| RuntimeError::bad_request(format!("等待发布请求解压失败: {error}")))??;
     let request: PublishPluginRequest = serde_json::from_slice(&body)
         .map_err(|error| RuntimeError::bad_request(format!("发布请求 JSON 无效: {error}")))?;
+    drop(body);
     let tenant_id =
-        publisher_tenant(&state, &headers, &request.git, request.tenant_id.as_deref()).await?;
+        authorize_publish_target(publisher, &request.git, request.tenant_id.as_deref())?;
     let manifest = az_plugin_manifest::parse_manifest(&request.manifest_toml)?;
     let metadata = manifest
         .plugin
@@ -315,14 +321,25 @@ fn decode_publish_body_with_limit(
     body: &Bytes,
     max_bytes: usize,
 ) -> Result<Vec<u8>, RuntimeError> {
-    let encoding = headers
-        .get(header::CONTENT_ENCODING)
+    let mut encodings = headers
+        .get_all(header::CONTENT_ENCODING)
+        .iter()
         .map(|value| {
             value
                 .to_str()
-                .map_err(|_| RuntimeError::bad_request("发布请求 Content-Encoding 无效"))
+                .map_err(|_| RuntimeError::unsupported_media_type("发布请求 Content-Encoding 无效"))
         })
-        .transpose()?;
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let encoding = encodings.next();
+    if encodings.next().is_some() {
+        return Err(RuntimeError::unsupported_media_type(
+            "发布请求只允许一种 Content-Encoding",
+        ));
+    }
     match encoding {
         None => Ok(body.to_vec()),
         Some(value) if value.eq_ignore_ascii_case("identity") => Ok(body.to_vec()),
@@ -336,14 +353,42 @@ fn decode_publish_body_with_limit(
                     RuntimeError::bad_request(format!("发布请求 gzip 解压失败: {error}"))
                 })?;
             if decoded.len() > max_bytes {
-                return Err(RuntimeError::bad_request("发布请求解压后超过大小限制"));
+                return Err(RuntimeError::payload_too_large(
+                    "发布请求解压后超过大小限制",
+                ));
             }
             Ok(decoded)
         }
-        Some(_) => Err(RuntimeError::bad_request(
+        Some(_) => Err(RuntimeError::unsupported_media_type(
             "发布请求只支持 identity 或 gzip Content-Encoding",
         )),
     }
+}
+
+fn ensure_publish_content_type(headers: &HeaderMap) -> Result<(), RuntimeError> {
+    let Some(content_type) = headers.get(header::CONTENT_TYPE) else {
+        return Err(RuntimeError::unsupported_media_type(
+            "发布请求必须声明 application/json Content-Type",
+        ));
+    };
+    let content_type = content_type
+        .to_str()
+        .map_err(|_| RuntimeError::unsupported_media_type("发布请求 Content-Type 无效"))?
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim();
+    let is_json = content_type.eq_ignore_ascii_case("application/json")
+        || content_type
+            .to_ascii_lowercase()
+            .strip_prefix("application/")
+            .is_some_and(|subtype| subtype.ends_with("+json"));
+    if !is_json {
+        return Err(RuntimeError::unsupported_media_type(
+            "发布请求必须使用 application/json Content-Type",
+        ));
+    }
+    Ok(())
 }
 
 async fn publish_job(
