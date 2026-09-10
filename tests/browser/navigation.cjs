@@ -86,6 +86,8 @@ async function scenario(browser, mobile) {
     for (const label of ["个人资料", "设置中心", "插件市场", "切换租户"]) {
       await openAccountPage(page, label, mobile);
       await page.locator(".application-fullscreen__content h2").first().waitFor();
+      await page.waitForFunction(() => !document.querySelector(".application-fullscreen__content").innerText.includes("正在读取"));
+      assert.equal(await page.locator('.application-fullscreen__content [role="alert"]').count(), 0);
       if (label === "设置中心") {
         await page.screenshot({ path: path.join(screenshotDir, `aio-account-fullscreen-${mobile ? "mobile" : "desktop"}.png`), fullPage: true });
       }
