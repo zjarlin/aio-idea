@@ -5,6 +5,7 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { chromium } = require("playwright");
+const verifyCounterState = require('./counter-state.cjs');
 
 const base = process.env.AIO_URL;
 const cli = process.env.AIO_TEST_CLI;
@@ -47,15 +48,7 @@ async function run(browser, mobile) {
     const sidebar = mobile ? page.getByRole("dialog") : page.locator(".application-shell__sidebar");
     await sidebar.getByRole("button", { name: "Dioxus 全栈计数器", exact: true }).click();
     const frame = page.frameLocator('iframe[title="Dioxus 全栈计数器"]');
-    await frame.getByRole("button", { name: "+1", exact: true }).waitFor({ timeout: 60000 });
-    await frame.getByRole("button", { name: "+1", exact: true }).click();
-    try {
-      await frame.getByText("计数：1", { exact: true }).waitFor();
-    } catch (error) {
-      console.error("插件页面:", await frame.locator("body").innerText());
-      throw error;
-    }
-    await frame.getByText(`租户：${tenant}`, { exact: true }).waitFor();
+    const counter = await verifyCounterState(page, context, tenant);
     assert.deepEqual(errors, [], "正常插件加载和调用不能产生控制台错误");
     const dimensions = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
     assert(dimensions.scroll <= dimensions.width, JSON.stringify(dimensions));
@@ -78,9 +71,9 @@ async function run(browser, mobile) {
     await page.locator(`iframe[src="${src}"]`).waitFor({ state: "hidden" });
     assert.equal((await context.request.get(src)).status(), 200, "切换菜单不能销毁前端挂载");
     await page.getByRole("navigation", { name: "场景" }).getByRole("button", { name: "社区插件", exact: true }).click();
-    await frame.getByText("计数：1", { exact: true }).waitFor();
+    await frame.getByText(`计数：${counter.count}`, { exact: true }).waitFor();
     assert.equal(await page.locator('iframe[title="Dioxus 全栈计数器"]').getAttribute("src"), src);
-    return { viewport: mobile ? "mobile" : "desktop", realDioxus: true, componentRequest: true, tenant, isolation, retained: true };
+    return { viewport: mobile ? "mobile" : "desktop", realDioxus: true, ...counter, tenant, isolation, retained: true };
   } catch (error) {
     console.error("宿主页面:", await page.locator("body").innerText());
     console.error("控制台:", errors);

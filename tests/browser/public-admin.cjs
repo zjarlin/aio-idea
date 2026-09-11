@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { mkdir, writeFile } = require('node:fs/promises');
 const { resolve } = require('node:path');
 const { chromium } = require('playwright');
+const verifyCounterState = require('./counter-state.cjs');
 
 const base = process.env.AIO_URL;
 assert(base && process.env.AIO_STORAGE_STATE, '需要宿主地址和受保护的浏览器登录状态');
@@ -39,12 +40,7 @@ async function run(browser, mobile) {
     assert.deepEqual(await community.locator('.application-shell__navigation-button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Dioxus 全栈计数器', 'KMP 全栈示例']);
     await community.getByRole('button', { name: 'Dioxus 全栈计数器', exact: true }).click();
     const frame = page.frameLocator('iframe[title="Dioxus 全栈计数器"]');
-    await frame.getByRole('button', { name: '+1', exact: true }).waitFor({ timeout: 60000 });
-    const before = await frame.locator('body').innerText();
-    const count = Number(before.match(/计数：([0-9]+)/)?.[1]);
-    assert(Number.isFinite(count));
-    await frame.getByRole('button', { name: '+1', exact: true }).click();
-    await frame.getByText(`计数：${count + 1}`, { exact: true }).waitFor();
+    const counter = await verifyCounterState(page, context);
     await page.screenshot({ path: resolve(output, `${mobile ? 'mobile' : 'desktop'}-dioxus.png`) });
     await (await nav()).locator('button[aria-label$="的账户菜单"]').click();
     await page.getByRole('menuitem', { name: '插件市场', exact: true }).click();
@@ -53,9 +49,9 @@ async function run(browser, mobile) {
     assert.equal(await page.locator('.application-shell:visible').count(), 0);
     await page.screenshot({ path: resolve(output, `${mobile ? 'mobile' : 'desktop'}-marketplace.png`) });
     await page.getByRole('button', { name: '返回主后台', exact: true }).click();
-    await frame.getByText(`计数：${count + 1}`, { exact: true }).waitFor();
+    await frame.getByText(`计数：${counter.count}`, { exact: true }).waitFor();
     assert.deepEqual(errors, []);
-    return { viewport: mobile ? 'mobile' : 'desktop', systemTables: true, onlyTwoCommunityPlugins: true, noHomeOrHello: true, dioxusBackend: true, fullscreenMarketReturn: true, consoleErrors: 0 };
+    return { viewport: mobile ? 'mobile' : 'desktop', systemTables: true, onlyTwoCommunityPlugins: true, noHomeOrHello: true, ...counter, fullscreenMarketReturn: true, consoleErrors: 0 };
   } catch (error) {
     await page.screenshot({ path: resolve(output, `${mobile ? 'mobile' : 'desktop'}-failure.png`) });
     console.error(await page.locator('body').innerText(), errors);

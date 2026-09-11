@@ -10,6 +10,8 @@ Cookie 文件采用 curl 的 Netscape 格式，仅保存在本机。也可通过
 
 系统页面通过真实接口读取数据。测试只在浏览器收到的目录响应中注入测试工作区、一个状态保持页面和一个社区账户页面，验证运行时页面与全屏入口；这些夹具不会写入数据库，壳没有内置首页。真实二进制发布、Dioxus/Component 调用和市场的停用、启用、卸载确认、重新安装由 `frontend.cjs` 覆盖。
 
+`counter-state.cjs` 同时被 `frontend.cjs` 和线上 `public-admin.cjs` 使用：Dioxus 本地 `+1` 在联网和断网连续点击时均不发请求；真实后端请求暂停期间，本地计数仍即时响应。显式「请求后端 +1」单独验证 Component 和租户透传，不将 UI 事件当成后端事件。
+
 `admin-files.cjs`、`admin-dictionaries.cjs`、`admin-rbac.cjs`、`admin-account.cjs` 通过 `system_management_browser_workflows` 测试启动真实系统插件接口，验证列表、搜索、排序、分页、表单、删除、权限撤销、密码及租户切换。仅允许本机 `aio_keepalive_test` 数据库，测试创建的临时租户由宿主清理；不要对生产环境运行这些写入用例。截图及报告位于 `target/admin-ui-test`。设置 `AIO_ADMIN_PREVIEW_PORT` 可启动隔离开发预览。
 
 `keepalive.cjs` 使用构建后的真实壳与 Compose 前端，在隔离 HTTP 协议夹具中验证桌面/移动端 canvas 绘制、计数状态、A→B→A 的 iframe/JS 实例不变、零重复挂载/释放/资产下载、账户全屏返回、版本替换、LRU 淘汰、页面撤销与会话上下文隔离。夹具不调用生产服务，不替代后端持久化测试。需要 Node 可解析 `playwright`、`pngjs`、`parse5`，以及本机 Chrome：
