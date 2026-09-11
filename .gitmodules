@@ -1,0 +1,3 @@
+[submodule "lib/dioxus-admin-workbench"]
+	path = lib/dioxus-admin-workbench
+	url = https://github.com/zjarlin/dioxus-admin-workbench.git

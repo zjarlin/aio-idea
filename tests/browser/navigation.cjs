@@ -48,7 +48,7 @@ async function openAccountPage(page, label, mobile) {
   const container = mobile ? page.getByRole("dialog") : page.locator(".application-shell__sidebar");
   await container.locator('button[aria-label$="的账户菜单"]').click();
   await page.getByRole("menuitem", { name: label, exact: true }).click();
-  await page.locator(".application-fullscreen").waitFor();
+  await page.locator(".application-fullscreen:visible").waitFor();
   assert.equal(await page.locator(".application-shell:visible").count(), 0);
   assert.equal(await page.locator(".application-shell__mobile-dialog:visible").count(), 0);
   assert.equal(await page.getByRole("navigation", { name: "场景" }).count(), 0);
@@ -57,7 +57,7 @@ async function openAccountPage(page, label, mobile) {
 
 async function returnToWorkspace(page) {
   await page.getByRole("button", { name: "返回主后台", exact: true }).click();
-  await page.locator(".application-fullscreen").waitFor({ state: "detached" });
+  await page.locator(".application-fullscreen:visible").waitFor({ state: "hidden" });
   await page.locator(".application-shell").waitFor({ state: "visible" });
 }
 
@@ -137,12 +137,12 @@ async function scenario(browser, mobile) {
 
     for (const label of ["个人资料", "设置中心", "插件市场", "切换租户", "社区账户扩展"]) {
       await openAccountPage(page, label, mobile);
-      await page.locator(".application-fullscreen__content h2").first().waitFor();
-      await page.waitForFunction(() => !document.querySelector(".application-fullscreen__content").innerText.includes("正在读取"));
-      assert.equal(await page.locator('.application-fullscreen__content [role="alert"]').count(), 0);
+      await page.locator(".application-fullscreen:visible .application-fullscreen__content h2").first().waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll(".application-fullscreen__content")].filter(element => element.checkVisibility()).every(element => !element.innerText.includes("正在读取")));
+      assert.equal(await page.locator('.application-fullscreen:visible [role="alert"]').count(), 0);
       if (label === "社区账户扩展") {
         await page.getByRole("button", { name: "扩展 +1", exact: true }).click();
-        await page.locator(".application-fullscreen__content").getByText("计数：1", { exact: true }).waitFor();
+        await page.locator(".application-fullscreen:visible .application-fullscreen__content").getByText("计数：1", { exact: true }).waitFor();
       }
       if (label === "设置中心") {
         await page.screenshot({ path: path.join(screenshotDir, `aio-account-fullscreen-${mobile ? "mobile" : "desktop"}.png`), fullPage: true });

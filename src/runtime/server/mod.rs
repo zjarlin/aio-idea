@@ -7,6 +7,7 @@ mod frontend_document;
 #[cfg(test)]
 mod frontend_http_tests;
 mod frontend_model;
+mod frontend_package;
 mod frontend_routes;
 #[cfg(test)]
 mod frontend_tests;

@@ -10,6 +10,10 @@
 
 `frontend_routes.rs` 提供前端挂载、只读资产、服务桥和卸载接口。`POST /api/runtime/frontend/mount` 接收 `page_id` 并返回 `data: {token, src, revision}`；`POST /api/runtime/frontend/<token>/request` 接收 `method/path/query/body` 并返回 `data: {status, content_type, body}`；`DELETE /api/runtime/frontend/<token>` 释放挂载。服务调用仍要求正常会话 Cookie，只读资产凭证不能替代登录。
 
+`POST /api/runtime/frontend/<token>/renew` 在会话、租户、权限和活动版本校验后续期，不能复活已失效票据。前端每 60 秒续期，页面重新显示时也续期；普通菜单切换不发送 DELETE。资源使用私有 ETag 条件缓存，返回 304 前仍校验权限和文件摘要，入口 HTML 不缓存。`frontend_package.rs` 最多复用 64 份已验证包元数据，避免每次挂载读取 PostgreSQL 整包、解码和重新准备；不缓存授权决策，资产丢失时重新准备。
+
+沙箱 SDK 提供 `aioPlugin.visible` 和 `aioPlugin.onVisibilityChange(listener)`（返回取消订阅函数），插件可据此暂停后台绘制、轮询和订阅。宿主只通知显隐，不擅自冻结插件业务；隐藏页面仍受请求配额和授权约束。没有续期超过 30 分钟后票据失效，再次显示会提示重新打开。
+
 前端文档使用不含 `allow-same-origin` 的 CSP sandbox，只能取自身版本的资产。宿主 `frame-src 'self'` 阻止隔离文档导航到外部站点。每次取文件和调用服务都会重新检查原会话、租户、页面权限、来源、版本及激活代次；停用后再启用也不能复活旧挂载。资产摘要逐次校验，服务调用复用 `service_dispatch.rs` 并与生命周期切换共用锁。`AIO_PUBLIC_ORIGIN` 必须与实际浏览器宿主地址一致，默认 `https://aio.addzero.site`；本地验证允许 loopback HTTP。宿主最多 256 个挂载、每用户 16 个、有效期 30 分钟及 32 个并发前端请求。
 
 `POST /api/runtime/plugins/publish` 直接接收 `application/vnd.aio.plugin+gzip` 包字节，编解码和完整性验证统一复用 `az-plugin-package`。不接收旧 GitProof JSON，不要求 Actions 或已提交产物。完整包保存于 `plugin_packages.archive`，同来源同 SemVer 不可覆盖不同内容；后台任务通过协议验证和健康检查后原子激活，只有成功的版本才更新市场并允许下载。发布凭证仍绑定租户和 Git 来源，只能由 `AIO_PLUGIN_PUBLISH_ACCOUNTS` 明确授权的管理员创建和撤销。

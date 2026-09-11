@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::env;
 
 use aio_plugin_identity_server::SessionContext;
@@ -150,6 +151,20 @@ pub(super) async fn catalog_value(
     catalog
         .account_items
         .retain(|item| permitted(item.required_permission.as_deref(), &session.permissions));
+    let mut permissions = session.permissions.clone();
+    permissions.sort();
+    catalog.context = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&(
+            &session.session_id,
+            &session.user_id,
+            &session.tenant_id,
+            permissions,
+        ))?)
+    );
+    catalog
+        .page_versions
+        .retain(|id, _| catalog.pages.iter().any(|page| &page.id == id));
     Ok(catalog)
 }
 

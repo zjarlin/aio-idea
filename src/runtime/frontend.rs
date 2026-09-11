@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 use serde::Deserialize;
 
 use super::RuntimeResponse;
+use az_ui_components::button::{Button, ButtonVariant};
 
 #[derive(Clone, Deserialize, PartialEq)]
 struct FrontendMount {
@@ -12,7 +13,8 @@ struct FrontendMount {
 
 #[component]
 pub(super) fn RuntimeFrontend(page_id: String, label: String) -> Element {
-    let mount = use_resource(move || {
+    let mut invalid = use_signal(|| None::<String>);
+    let mut mount = use_resource(move || {
         let page_id = page_id.clone();
         async move {
             let response = gloo_net::http::Request::post("/api/runtime/frontend/mount")
@@ -34,9 +36,25 @@ pub(super) fn RuntimeFrontend(page_id: String, label: String) -> Element {
                 .map_err(|error| error.to_string())
         }
     });
+    let failure = invalid().or_else(|| {
+        mount
+            .read()
+            .as_ref()
+            .and_then(|value| value.as_ref().err().cloned())
+    });
+    if let Some(message) = failure {
+        return rsx! {
+            p { role: "alert", "加载插件页面失败: {message}" }
+            Button {
+                variant: ButtonVariant::Outline,
+                onclick: move |_| { mount.clear(); invalid.set(None); mount.restart(); },
+                "重新打开"
+            }
+        };
+    }
     match mount.read().as_ref() {
         Some(Ok(mount)) => {
-            rsx! { MountedFrontend { key: "{mount.token}", mount: mount.clone(), label } }
+            rsx! { MountedFrontend { key: "{mount.token}", mount: mount.clone(), label, on_error: move |error| invalid.set(Some(error)) } }
         }
         Some(Err(error)) => rsx! { p { role: "alert", "加载插件页面失败: {error}" } },
         None => rsx! { p { role: "status", "正在加载插件页面" } },
@@ -44,9 +62,8 @@ pub(super) fn RuntimeFrontend(page_id: String, label: String) -> Element {
 }
 
 #[component]
-fn MountedFrontend(mount: FrontendMount, label: String) -> Element {
+fn MountedFrontend(mount: FrontendMount, label: String, on_error: Callback<String>) -> Element {
     let mut bridge = use_signal(|| None::<document::Eval>);
-    let mut error = use_signal(|| None::<String>);
     let frame_id = format!("aio-frontend-{}", mount.token);
     let config = serde_json::json!({ "id": frame_id, "token": mount.token, "src": mount.src });
     use_drop(move || {
@@ -55,9 +72,6 @@ fn MountedFrontend(mount: FrontendMount, label: String) -> Element {
         }
     });
     rsx! {
-        if let Some(message) = error() {
-            p { role: "alert", "{message}" }
-        }
         iframe {
             id: frame_id,
             title: label,
@@ -67,10 +81,19 @@ fn MountedFrontend(mount: FrontendMount, label: String) -> Element {
             referrerpolicy: "no-referrer",
             onmounted: move |_| {
                 if bridge().is_none() {
-                    let evaluator = document::eval(include_str!("frontend_host.js"));
+                    let mut evaluator = document::eval(include_str!("frontend_host.js"));
                     match evaluator.send(config.clone()) {
-                        Ok(()) => bridge.set(Some(evaluator)),
-                        Err(cause) => error.set(Some(format!("启动插件通信桥失败: {cause}"))),
+                        Ok(()) => {
+                            bridge.set(Some(evaluator));
+                            spawn(async move {
+                                if let Ok(message) = evaluator.recv::<serde_json::Value>().await
+                                    && let Some(message) = message.get("error").and_then(|value| value.as_str())
+                                {
+                                    on_error.call(message.to_owned());
+                                }
+                            });
+                        },
+                        Err(cause) => on_error.call(format!("启动插件通信桥失败: {cause}")),
                     }
                 }
             },

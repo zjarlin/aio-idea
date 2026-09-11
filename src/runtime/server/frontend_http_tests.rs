@@ -113,6 +113,34 @@ async fn exercise(state: &RuntimeState, base: &str) -> Result<()> {
     assert!(html.contains("__aio_bridge.js"));
     assert!(html.contains("first"));
     let root = format!("{base}/api/runtime/frontend/assets/{token}");
+    let lease = format!("{base}/api/runtime/frontend/{token}/renew");
+    assert_eq!(
+        client.post(&lease).send().await?.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .post(&lease)
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let cached = super::frontend_package::prepare(state, &first.rev, "index.html").await?;
+    let reused = super::frontend_package::prepare(state, &first.rev, "index.html").await?;
+    assert!(Arc::ptr_eq(&cached, &reused), "已验证版本不能再次解包");
+    let asset = client.get(format!("{root}/assets/app.js")).send().await?;
+    let etag = asset.headers()[header::ETAG].clone();
+    assert_eq!(
+        client
+            .get(format!("{root}/assets/app.js"))
+            .header(header::IF_NONE_MATCH, &etag)
+            .send()
+            .await?
+            .status(),
+        StatusCode::NOT_MODIFIED
+    );
     assert_eq!(
         client
             .get(format!("{root}/assets/app.js"))
@@ -160,6 +188,24 @@ async fn exercise(state: &RuntimeState, base: &str) -> Result<()> {
         .await?;
     assert_eq!(
         client.get(format!("{base}{src}")).send().await?.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .post(&lease)
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await?
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        client
+            .get(format!("{root}/assets/app.js"))
+            .header(header::IF_NONE_MATCH, &etag)
+            .send()
+            .await?
+            .status(),
         StatusCode::FORBIDDEN
     );
     sqlx::query("UPDATE plugin_revisions SET pages=$1 WHERE source_id=$2")

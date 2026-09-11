@@ -2,6 +2,8 @@
   const token = document.currentScript.dataset.token;
   const pending = new Map();
   let sequence = 0;
+  let visible = true;
+  const visibilityListeners = new Set();
   const request = ({ method = "GET", path, query = null, body = "" }) => new Promise((resolve, reject) => {
     if (pending.size >= 16) return reject(new Error("请求数量超过限制"));
     const id = String(++sequence);
@@ -11,6 +13,13 @@
   });
   addEventListener("message", (event) => {
     if (event.source !== parent || event.data?.channel !== "aio-plugin" || event.data.token !== token) return;
+    if (event.data.lifecycle === "visibility" && typeof event.data.visible === "boolean") {
+      visible = event.data.visible;
+      for (const listener of visibilityListeners) {
+        try { listener(visible); } catch (error) { console.error(error); }
+      }
+      return;
+    }
     const item = pending.get(event.data.id);
     if (!item) return;
     clearTimeout(item.timeout);
@@ -24,5 +33,11 @@
     if (response.status < 200 || response.status >= 300) throw new Error(result?.error || `HTTP ${response.status}`);
     return result;
   };
-  Object.defineProperty(window, "aioPlugin", { value: Object.freeze({ request, json }), writable: false, configurable: false });
+  const onVisibilityChange = (listener) => {
+    if (typeof listener !== "function") throw new TypeError("可见性监听器必须是函数");
+    visibilityListeners.add(listener);
+    listener(visible);
+    return () => visibilityListeners.delete(listener);
+  };
+  Object.defineProperty(window, "aioPlugin", { value: Object.freeze({ request, json, get visible() { return visible; }, onVisibilityChange }), writable: false, configurable: false });
 })();

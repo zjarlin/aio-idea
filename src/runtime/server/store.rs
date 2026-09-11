@@ -202,12 +202,13 @@ impl PluginStore {
         user: UserView,
     ) -> Result<RuntimeCatalog> {
         let rows = sqlx::query(
-            "SELECT sources.id, sources.git, revisions.id AS revision_id, revisions.revision, revisions.runtime, revisions.manifest, revisions.pages, bindings.enabled FROM tenant_plugin_bindings bindings JOIN plugin_sources sources ON sources.id = bindings.source_id JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.tenant_id = $1 ORDER BY sources.git",
+            "SELECT sources.id, sources.git, revisions.id AS revision_id, revisions.revision, revisions.runtime, revisions.manifest, revisions.pages, bindings.enabled, bindings.updated_at::TEXT AS activation_generation FROM tenant_plugin_bindings bindings JOIN plugin_sources sources ON sources.id = bindings.source_id JOIN plugin_revisions revisions ON revisions.id = bindings.revision_id WHERE bindings.tenant_id = $1 ORDER BY sources.git",
         )
         .bind(tenant_id)
         .fetch_all(&self.pool)
         .await?;
         let mut pages = Vec::new();
+        let mut page_versions = std::collections::BTreeMap::new();
         let mut account_items = Vec::new();
         let mut plugins = Vec::new();
         for row in rows {
@@ -222,6 +223,12 @@ impl PluginStore {
                 self.overlay_page_states(tenant_id, &revision_id, &mut plugin_pages)
                     .await?;
                 account_items.extend(runtime_account_items(&source_id, &manifest, &plugin_pages)?);
+                let revision: String = row.try_get("revision")?;
+                let generation: String = row.try_get("activation_generation")?;
+                let version = serde_json::to_string(&(&source_id, revision, generation))?;
+                for page in &plugin_pages {
+                    page_versions.insert(page.id.clone(), version.clone());
+                }
                 pages.extend(plugin_pages);
             }
             plugins.push(InstalledPluginView {
@@ -239,6 +246,8 @@ impl PluginStore {
         }
         ensure_unique_pages(&pages)?;
         Ok(RuntimeCatalog {
+            context: String::new(),
+            page_versions,
             tenant: TenantView {
                 id: tenant_id.to_owned(),
                 label: tenant_label.to_owned(),

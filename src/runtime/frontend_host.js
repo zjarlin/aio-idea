@@ -7,6 +7,9 @@ if (assetURL.origin !== window.location.origin || !assetURL.pathname.startsWith(
 }
 const requests = new Map();
 let disposed = false;
+let renewing = false;
+const page = frame.closest("[data-aio-page-active]");
+const visible = () => !document.hidden && (!page || page.dataset.aioPageActive === "true");
 const reply = (message) => {
   if (!disposed) frame.contentWindow?.postMessage({ channel: "aio-plugin", token: config.token, ...message }, "*");
 };
@@ -43,16 +46,62 @@ const receive = async (event) => {
   }
 };
 window.addEventListener("message", receive);
+const visibility = () => {
+  reply({ lifecycle: "visibility", visible: visible() });
+};
+const revoke = () => fetch(`/api/runtime/frontend/${config.token}`, {
+  method: "DELETE", credentials: "same-origin", keepalive: true, redirect: "error",
+}).catch(() => {});
+const cleanup = () => {
+  if (disposed) return;
+  disposed = true;
+  clearInterval(heartbeat);
+  observer.disconnect();
+  document.removeEventListener("visibilitychange", activity);
+  window.removeEventListener("pagehide", leave);
+  window.removeEventListener("pageshow", activity);
+  window.removeEventListener("message", receive);
+  frame.removeEventListener("load", visibility);
+  for (const controller of requests.values()) controller.abort();
+  requests.clear();
+  frame.removeAttribute("src");
+  revoke();
+};
+const renew = async () => {
+  if (disposed || renewing) return;
+  renewing = true;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  requests.set("lease", controller);
+  try {
+    const response = await fetch(`/api/runtime/frontend/${config.token}/renew`, {
+      method: "POST", credentials: "same-origin", redirect: "error", signal: controller.signal,
+    });
+    if ([401, 403, 404].includes(response.status) && !disposed) {
+      cleanup();
+      dioxus.send({ error: "插件挂载已失效，请重新打开页面" });
+      window.dispatchEvent(new Event("aio:catalog-invalidated"));
+    }
+  } catch (_) {
+    // 临时断网不销毁已加载界面；服务端仍逐次校验业务请求权限。
+  } finally {
+    clearTimeout(timeout);
+    requests.delete("lease");
+    renewing = false;
+  }
+};
+const activity = () => { visibility(); if (visible()) void renew(); };
+const leave = event => { if (!event.persisted) cleanup(); };
+const observer = new MutationObserver(activity);
+if (page) observer.observe(page, { attributes: true, attributeFilter: ["data-aio-page-active"] });
+document.addEventListener("visibilitychange", activity);
+window.addEventListener("pagehide", leave);
+window.addEventListener("pageshow", activity);
+frame.addEventListener("load", visibility);
+const heartbeat = setInterval(renew, 60000);
 frame.src = assetURL.href;
 try {
   await dioxus.recv();
 } finally {
-  disposed = true;
-  window.removeEventListener("message", receive);
-  for (const controller of requests.values()) controller.abort();
-  requests.clear();
-  frame.removeAttribute("src");
-  fetch(`/api/runtime/frontend/${config.token}`, {
-    method: "DELETE", credentials: "same-origin", keepalive: true, redirect: "error",
-  }).catch(() => {});
+  cleanup();
 }

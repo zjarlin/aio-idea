@@ -65,10 +65,12 @@ async function run(browser, mobile) {
     assert.equal(denied.status(), 404);
     await page.screenshot({ path: path.join(os.tmpdir(), `aio-dioxus-fullstack-${mobile ? "mobile" : "desktop"}.png`), fullPage: true });
     await page.getByRole("navigation", { name: "场景" }).getByRole("button", { name: "工作区", exact: true }).click();
-    await page.locator("iframe").waitFor({ state: "detached" });
-    await page.waitForTimeout(150);
-    assert.equal((await context.request.get(src)).status(), 401, "卸载页面须撤销资产挂载凭证");
-    return { viewport: mobile ? "mobile" : "desktop", realDioxus: true, componentRequest: true, tenant, isolation, revoked: true };
+    await page.locator(`iframe[src="${src}"]`).waitFor({ state: "hidden" });
+    assert.equal((await context.request.get(src)).status(), 200, "切换菜单不能销毁前端挂载");
+    await page.getByRole("navigation", { name: "场景" }).getByRole("button", { name: "社区插件", exact: true }).click();
+    await frame.getByText("计数：1", { exact: true }).waitFor();
+    assert.equal(await page.locator('iframe[title="Dioxus 全栈计数器"]').getAttribute("src"), src);
+    return { viewport: mobile ? "mobile" : "desktop", realDioxus: true, componentRequest: true, tenant, isolation, retained: true };
   } catch (error) {
     console.error("宿主页面:", await page.locator("body").innerText());
     console.error("控制台:", errors);

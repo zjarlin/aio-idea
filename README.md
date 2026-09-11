@@ -10,6 +10,8 @@
 
 顶部场景选择当前菜单树的根，侧栏只显示当前场景的业务菜单。账户插件贡献的个人资料、设置、市场和租户切换页面从左下角进入独立全屏视图，点击“返回主后台”后保留原场景、页面及页面内部状态；账户页面不会重复出现在侧栏。此规则由共享壳处理，也适用于运行时子插件贡献的账户页面。
 
+页面首次访问才挂载，菜单切换只隐藏旧页面。共享壳默认保留最近访问的 6 个后台页面和 2 个账户页面，不移动已挂载 iframe；缓存内切回会保留 Compose/JS 状态，无需重新申请票据或下载资源。超出容量淘汰非当前最久未访问页面，淘汰后重新打开仍是冷加载。目录每 30 秒以及窗口重新聚焦时刷新；版本、激活代次或页面权限变化会销毁对应缓存，会话、租户或用户权限变化会重建整个页面池。后端每次请求仍即时鉴权，前端目录刷新不是安全边界。
+
 当前默认系统树由独立插件仓库共同贡献，目录节点本身不是业务页面：
 
 ```text
@@ -39,11 +41,14 @@ flowchart LR
 ```
 
 ```bash
+git submodule update --init --recursive
 dx serve
 cargo run --no-default-features --features desktop
 cargo run --no-default-features --features server
 aio plugin install <git>
 aio plugin sync
 ```
+
+`lib/dioxus-admin-workbench` 以 Git 子模块锁定完整版本，Cargo patch 将产品和静态扩展的基础 UI crates 统一到该版本，避免同名不同源码依赖造成 Rust 类型不一致。它是基础库，不是运行时业务插件；CI、容器构建前必须初始化子模块。
 
 252 生产发布使用 [发布脚本和服务单元](deploy/252/README.md)，由独立进程监督器管理隔离容器，Cloudflare Tunnel 或反向代理提供公网入口。`compose.yaml` 仅是应用容器构建入口，尚未装配监督器 socket、共享缓存和受限运行网络，不能单独作为完整插件宿主启动。

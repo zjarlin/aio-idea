@@ -57,3 +57,8 @@ unsafe_code = "forbid"
 [dev-dependencies]
 base64 = "0.22.1"
 tempfile = "3.23.0"
+
+[patch."https://github.com/zjarlin/dioxus-admin-workbench.git"]
+az-dioxus-admin-shell = { path = "lib/dioxus-admin-workbench/crates/admin-shell/dioxus" }
+az-ui-components = { path = "lib/dioxus-admin-workbench/crates/ui/components" }
+az-admin-shell-core = { path = "lib/dioxus-admin-workbench/crates/admin-shell/core" }

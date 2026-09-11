@@ -39,21 +39,8 @@ pub(super) async fn mount(
         return Err(RuntimeError::forbidden("活动页面来源已变化，请重试挂载"));
     }
     let entry = frontend_entry(&binding)?.to_owned();
-    let archive = state
-        .store
-        .package_archive(&binding.service.revision)
-        .await?
-        .context("前端挂载要求插件中心保存完整二进制包")?;
     let package =
-        tokio::task::spawn_blocking(move || az_plugin_package::PluginPackage::decode(&archive))
-            .await
-            .context("等待前端二进制包校验失败")??;
-    if package.rev != binding.service.revision || !package.frontend.contains_key(&entry) {
-        return Err(RuntimeError::bad_request("前端入口与活动二进制包不一致"));
-    }
-    let manifest = package.verify()?.manifest;
-    let frontend_path = manifest.plugin.frontend.context("插件未声明前端产物")?.path;
-    state.repository.stage_publish(&package).await?;
+        super::frontend_package::prepare(&state, &binding.service.revision, &entry).await?;
     let grant = FrontendGrant {
         cookie: headers
             .get(header::COOKIE)
@@ -67,12 +54,8 @@ pub(super) async fn mount(
         activation_generation: binding.activation_generation,
         revision: binding.service.revision.clone(),
         entry: entry.clone(),
-        frontend_path,
-        assets: package
-            .frontend
-            .into_iter()
-            .map(|(path, asset)| (path, asset.sha256))
-            .collect(),
+        frontend_path: package.path.clone(),
+        assets: package.assets.clone(),
         issued: Instant::now(),
     };
     let token = state.frontend.issue(grant)?;
@@ -87,6 +70,7 @@ pub(super) async fn mount(
 
 pub(super) async fn asset(
     State(state): State<RuntimeState>,
+    request_headers: HeaderMap,
     Path((token, path)): Path<(String, String)>,
 ) -> Result<Response, RuntimeError> {
     if path != frontend_document::BRIDGE_PATH {
@@ -134,14 +118,38 @@ pub(super) async fn asset(
     if path == grant.entry {
         bytes = frontend_document::render_entry(&bytes, &prefix, &grant.entry, &token)?;
     }
-    let mut response = bytes.into_response();
+    let etag = (path != grant.entry).then(|| format!("\"{:x}\"", Sha256::digest(&bytes)));
+    let not_modified = etag.as_ref().is_some_and(|expected| {
+        request_headers
+            .get(header::IF_NONE_MATCH)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value.split(',').any(|tag| {
+                    let tag = tag.trim().strip_prefix("W/").unwrap_or(tag.trim());
+                    tag == expected || tag == "*"
+                })
+            })
+    });
+    // 条件请求也必须先通过会话、活动版本和资产摘要校验，缓存不能绕过撤销。
+    let mut response = if not_modified {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        bytes.into_response()
+    };
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_str(&content_type)?);
     // 禁止边缘代理向隔离文档注入宿主未授权的脚本。
     headers.insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("private, no-store, no-transform"),
+        HeaderValue::from_static(if etag.is_some() {
+            "private, no-cache, no-transform"
+        } else {
+            "private, no-store, no-transform"
+        }),
     );
+    if let Some(etag) = etag {
+        headers.insert(header::ETAG, HeaderValue::from_str(&etag)?);
+    }
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -212,6 +220,23 @@ pub(super) async fn unmount(
         return Err(RuntimeError::forbidden("不能释放其他会话的前端挂载"));
     }
     state.frontend.remove(&token)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn renew(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+) -> Result<StatusCode, RuntimeError> {
+    authenticate(&state, &headers).await?;
+    let _slot = request_slot(&state)?;
+    let grant = grant(&state, &token)?;
+    let lock = state.activation_lock(&grant.tenant_id, &grant.source_id)?;
+    let _guard = lock.lock().await;
+    let grant = self::grant(&state, &token)?;
+    let session = authenticate(&state, &headers).await?;
+    validate_binding(&state, &session, &grant).await?;
+    state.frontend.renew(&token)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

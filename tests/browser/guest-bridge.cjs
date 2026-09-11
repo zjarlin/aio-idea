@@ -25,3 +25,26 @@ test('JSON bridge preserves HTTP errors, payloads and empty responses', async ()
   reply({ status: 400, body: '{"error":"Title required"}' });
   await assert.rejects(invalid, /Title required/);
 });
+
+test('visibility events are scoped to the parent and mount and can unsubscribe', () => {
+  let receive;
+  const parent = {};
+  const window = {};
+  vm.runInNewContext(fs.readFileSync('src/runtime/server/frontend_guest.js', 'utf8'), {
+    document: { currentScript: { dataset: { token: 'mount' } } },
+    window, parent, setTimeout, clearTimeout,
+    addEventListener(type, callback) { if (type === 'message') receive = callback; },
+  });
+  const observed = [];
+  const stop = window.aioPlugin.onVisibilityChange(value => observed.push(value));
+  const event = { source: parent, data: { channel: 'aio-plugin', token: 'mount', lifecycle: 'visibility', visible: false } };
+  receive({ ...event, source: {} });
+  receive({ ...event, data: { ...event.data, token: 'other' } });
+  assert.equal(window.aioPlugin.visible, true);
+  receive(event);
+  assert.equal(window.aioPlugin.visible, false);
+  assert.deepEqual(observed, [true, false]);
+  stop();
+  receive({ ...event, data: { ...event.data, visible: true } });
+  assert.deepEqual(observed, [true, false]);
+});

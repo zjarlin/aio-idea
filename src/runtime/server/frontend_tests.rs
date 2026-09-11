@@ -59,6 +59,23 @@ fn grants_expire_revoke_and_enforce_per_user_quota() -> anyhow::Result<()> {
 }
 
 #[test]
+fn renew_keeps_token_without_reviving_expired_or_removed_mounts() -> anyhow::Result<()> {
+    let access = FrontendAccess::new("http://127.0.0.1:8080")?;
+    let mut old = grant();
+    old.issued = Instant::now() - Duration::from_secs(1790);
+    let token = access.issue(old)?;
+    access.renew(&token)?;
+    assert!(access.get(&token)?.issued.elapsed() < Duration::from_secs(1));
+    access.remove(&token)?;
+    assert!(access.renew(&token).is_err());
+    let mut old = grant();
+    old.issued = Instant::now() - Duration::from_secs(1801);
+    let token = access.issue(old)?;
+    assert!(access.renew(&token).is_err());
+    Ok(())
+}
+
+#[test]
 fn document_bootstrap_replaces_base_and_stays_in_sandbox() -> anyhow::Result<()> {
     let prefix = "https://aio.example/api/runtime/frontend/assets/token/";
     let rendered = frontend_document::render_entry(b"<!doctype html><html><head><base href='https://evil.example/'></head><body><script type='module' src='assets/app.js'></script></body></html>", prefix, "index.html", "token")?;

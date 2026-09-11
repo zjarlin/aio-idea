@@ -34,6 +34,10 @@ pub fn router(state: RuntimeState) -> Router {
     Router::new()
         .route("/api/runtime/frontend/mount", post(frontend_routes::mount))
         .route(
+            "/api/runtime/frontend/{token}/renew",
+            post(frontend_routes::renew),
+        )
+        .route(
             "/api/runtime/frontend/assets/{token}/{*path}",
             get(frontend_routes::asset).layer(super::frontend_delivery::compression()),
         )

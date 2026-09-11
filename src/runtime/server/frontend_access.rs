@@ -24,6 +24,8 @@ pub(super) struct FrontendGrant {
 }
 
 pub(super) struct FrontendAccess {
+    pub packages:
+        tokio::sync::Mutex<BTreeMap<String, Arc<super::frontend_package::FrontendPackage>>>,
     grants: Mutex<HashMap<String, FrontendGrant>>,
     pub origin: String,
     requests: Arc<tokio::sync::Semaphore>,
@@ -32,6 +34,7 @@ pub(super) struct FrontendAccess {
 impl FrontendAccess {
     pub fn new(origin: &str) -> Result<Self> {
         Ok(Self {
+            packages: tokio::sync::Mutex::new(BTreeMap::new()),
             grants: Mutex::new(HashMap::new()),
             origin: super::frontend_document::public_origin(origin)?,
             requests: Arc::new(tokio::sync::Semaphore::new(32)),
@@ -83,6 +86,20 @@ impl FrontendAccess {
             .lock()
             .map_err(|_| anyhow::anyhow!("前端挂载记录不可用"))?
             .remove(token);
+        Ok(())
+    }
+
+    pub fn renew(&self, token: &str) -> Result<()> {
+        let mut grants = self
+            .grants
+            .lock()
+            .map_err(|_| anyhow::anyhow!("前端挂载记录不可用"))?;
+        let grant = grants.get_mut(token).context("前端挂载已释放")?;
+        ensure!(
+            grant.issued.elapsed() < Duration::from_secs(1800),
+            "前端挂载已过期"
+        );
+        grant.issued = Instant::now();
         Ok(())
     }
 }

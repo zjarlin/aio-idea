@@ -38,13 +38,24 @@ fn App() -> dioxus::prelude::Element {
     };
     use dioxus::prelude::*;
 
-    let application = use_resource(|| async {
+    let mut application = use_resource(|| async {
         let session = aio_plugin_identity_client::load_session().await?;
         let catalog = match session.as_ref() {
             Some(_) => Some(runtime::client::catalog().await?),
             None => None,
         };
         Ok::<_, String>((session, catalog))
+    });
+    use_future(move || async move {
+        loop {
+            if document::eval(include_str!("runtime/catalog_watch.js"))
+                .await
+                .is_err()
+            {
+                break;
+            }
+            application.restart();
+        }
     });
     let Some(application_result) = application.read().as_ref().cloned() else {
         return standalone_page(rsx! { p { "正在验证会话" } });
@@ -121,20 +132,24 @@ fn App() -> dioxus::prelude::Element {
             required_permission: page.required_permission,
             definition: serde_json::to_string(&page.body).unwrap_or_default(),
         })
-        .collect();
+        .collect::<Vec<_>>();
     rsx! {
-        PluginApplication {
+        for context in [catalog.context] {
+          PluginApplication {
+            key: "{context}",
             application_label: "AIO IDEA",
-            pages: static_plugins.pages,
-            account_items,
-            runtime_pages,
+            pages: static_plugins.pages.clone(),
+            account_items: account_items.clone(),
+            runtime_pages: runtime_pages.clone(),
+            runtime_page_versions: catalog.page_versions.clone(),
             render_runtime_page: runtime::client::render_page,
             on_account_action: runtime::client::account_action,
             user: ApplicationUser {
-                label: catalog.user.label,
-                handle: catalog.user.handle,
-                initials: catalog.user.initials,
+                label: catalog.user.label.clone(),
+                handle: catalog.user.handle.clone(),
+                initials: catalog.user.initials.clone(),
             },
+          }
         }
     }
 }
