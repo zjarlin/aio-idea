@@ -137,7 +137,11 @@ pub(super) async fn asset(
     let mut response = bytes.into_response();
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_str(&content_type)?);
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // 禁止边缘代理向隔离文档注入宿主未授权的脚本。
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store, no-transform"),
+    );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),

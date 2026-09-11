@@ -99,7 +99,10 @@ async fn exercise(state: &RuntimeState, base: &str) -> Result<()> {
         .await?
         .error_for_status()?;
     assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
-    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(
+        response.headers()[header::CACHE_CONTROL],
+        "private, no-store, no-transform"
+    );
     assert!(
         response.headers()[header::CONTENT_SECURITY_POLICY]
             .to_str()?
