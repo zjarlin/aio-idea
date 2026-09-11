@@ -29,6 +29,6 @@ curl --fail https://aio.addzero.site/health
 ./deploy/252/publish.zsh <完整 Git SHA>
 ```
 
-发布器拒绝未提交的工作树和非完整 SHA。它会在本地分别执行服务端测试、Web 检查、glibc 2.17 服务端构建和 Web 构建，将候选二进制、前端资源、`aio.toml` 和两项 systemd 单元上传到远端临时目录。切换前会备份现有 unit 与 enabled 状态；候选服务在 300 秒内通过本机健康检查、并在 60 秒内通过公网健康检查后才算激活。任一步失败都会恢复旧链接、unit、enabled 状态和服务，并删除失败发布目录。
+发布器拒绝未提交的工作树和非完整 SHA。它会在本地分别执行服务端测试、Web 检查、glibc 2.17 服务端构建和 Web 构建，将候选二进制、前端资源、`aio.toml` 和两项 systemd 单元上传到远端临时目录。切换前会备份现有 unit 与 enabled 状态；候选服务只有在 `aio-idea.service` 的 `MainPID` 确实执行当前 release 二进制后，本机 `/health` 才会被接受，随后还必须在 60 秒内通过公网健康检查。任一步失败都会恢复旧链接、unit、enabled 状态和服务，并删除失败发布目录。
 
 这条路径是受控发布器，不是公网 Git 安装器。公网运行时只安装已构建的 `wasm-component`、`page-definition` 与受限 `process` 产物，安装过程不会执行仓库脚本。CI 同时上传原始 Git commit 和所需 tree 对象；服务端离线校验对象哈希及清单、artifact 的提交归属，无需为发布回连远程 Git。健康检查和激活成功后才更新数据库市场条目。

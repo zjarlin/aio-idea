@@ -1,5 +1,5 @@
 [Unit]
-Description=Cloudflare Tunnel for AIO public plugin shell
+Description=Cloudflare Tunnel for AIO IDEA
 After=network-online.target aio-idea.service
 Wants=network-online.target
 

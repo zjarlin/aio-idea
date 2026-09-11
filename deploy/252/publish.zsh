@@ -115,6 +115,37 @@ wait_for_health() {
     return 1
 }
 
+release_binary_matches_main_pid() {
+    expected_binary=\$1
+    expected_path=\$(readlink -f "\$expected_binary" 2>/dev/null) || return 1
+    current_path=\$(readlink -f "\$deploy_root/current/aio-idea" 2>/dev/null) || return 1
+    [ "\$current_path" = "\$expected_path" ] || return 1
+    systemctl is-active --quiet aio-idea.service || return 1
+    main_pid_line=\$(systemctl show aio-idea.service --property MainPID 2>/dev/null) || return 1
+    main_pid=\${main_pid_line#MainPID=}
+    case "\$main_pid" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "\$main_pid" -gt 0 ] || return 1
+    running_path=\$(readlink -f "/proc/\$main_pid/exe" 2>/dev/null) || return 1
+    [ "\$running_path" = "\$expected_path" ]
+}
+
+wait_for_release_health() {
+    expected_binary=\$1
+    url=\$2
+    seconds=\$3
+    deadline=\$((\$(date +%s) + seconds))
+    while [ \$(date +%s) -lt "\$deadline" ]; do
+        if release_binary_matches_main_pid "\$expected_binary" \\
+            && curl --fail --silent --show-error --connect-timeout 1 --max-time 2 "\$url" >/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
 restore_previous() {
     set +e
     rm -f \"\$deploy_root/.next\"
@@ -141,7 +172,7 @@ restore_previous() {
     if [ -n \"\$previous\" ]; then
         systemctl restart aio-plugin-supervisor.service
         systemctl restart aio-idea.service
-        wait_for_health http://127.0.0.1:3080/health 300
+        wait_for_release_health "\$previous/aio-idea" http://127.0.0.1:3080/health 300
     else
         systemctl stop aio-idea.service aio-plugin-supervisor.service
     fi
@@ -157,7 +188,7 @@ activate_candidate() {
         && mv -Tf \"\$deploy_root/.next\" \"\$deploy_root/current\" \\
         && systemctl restart aio-plugin-supervisor.service \\
         && systemctl restart aio-idea.service \\
-        && wait_for_health http://127.0.0.1:3080/health 300 \\
+        && wait_for_release_health "\$remote_release/aio-idea" http://127.0.0.1:3080/health 300 \\
         && wait_for_health https://aio.addzero.site/health 60
 }
 
