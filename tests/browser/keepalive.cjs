@@ -120,7 +120,9 @@ async function run(browser, mobile) {
     await page.waitForTimeout(350);
     const canvas = frame.locator('canvas').first();
     const before = PNG.sync.read(await canvas.screenshot());
-    await frame.getByRole('button', { name: '+1', exact: true }).click({ force: true });
+    const increment = await frame.getByRole('button', { name: '+1', exact: true }).boundingBox();
+    assert(increment);
+    await page.mouse.click(increment.x + increment.width / 2, increment.y + increment.height / 2);
     await frame.getByText('1', { exact: true }).waitFor();
     const after = PNG.sync.read(await canvas.screenshot());
     let changed = 0; for (let i = 0; i < before.data.length; i += 4) if (before.data.readUInt32BE(i) !== after.data.readUInt32BE(i)) changed++;
@@ -165,9 +167,16 @@ async function run(browser, mobile) {
     await refresh();
     await select('Compose 保活');
     await frame.locator('canvas').first().waitFor({ timeout: 60000 });
+    const previousContextSrc = await iframe.getAttribute('src');
+    await frame.locator('body').evaluate(() => window.__previousContext = true);
     fixture.catalog.context = 'session-b';
     await refresh();
-    await iframe.waitFor({ state: 'detached' });
+    await page.locator(`iframe[src="${previousContextSrc}"]`).waitFor({ state: 'detached' });
+    if (await iframe.count()) {
+      await frame.locator('canvas').first().waitFor({ timeout: 60000 });
+      assert.notEqual(await iframe.getAttribute('src'), previousContextSrc);
+      assert.equal(await frame.locator('body').evaluate(() => window.__previousContext), undefined);
+    }
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     assert.deepEqual(errors, []);
     return { viewport: mobile ? 'mobile' : 'desktop', warmMs, changedCanvasPixels: changed, warmMounts: 0, warmDeletes: 0, warmAssets: 0, retainedState: true, fullscreenReturn: true, versionInvalidation: true, lruEviction: true, permissionRemoval: true, contextInvalidation: true, consoleErrors: 0 };
