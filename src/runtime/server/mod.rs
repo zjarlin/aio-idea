@@ -2,6 +2,7 @@ mod activation_store;
 mod frontend_access;
 #[cfg(test)]
 mod frontend_browser_tests;
+mod frontend_delivery;
 mod frontend_document;
 #[cfg(test)]
 mod frontend_http_tests;

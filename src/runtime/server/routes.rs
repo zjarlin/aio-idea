@@ -35,7 +35,7 @@ pub fn router(state: RuntimeState) -> Router {
         .route("/api/runtime/frontend/mount", post(frontend_routes::mount))
         .route(
             "/api/runtime/frontend/assets/{token}/{*path}",
-            get(frontend_routes::asset),
+            get(frontend_routes::asset).layer(super::frontend_delivery::compression()),
         )
         .route(
             "/api/runtime/frontend/{token}/request",
