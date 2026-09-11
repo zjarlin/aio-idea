@@ -615,7 +615,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-manifest"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=751161e3217e90400b64ffaf25013dcff7ba1a59#751161e3217e90400b64ffaf25013dcff7ba1a59"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=945f36465ff604defcdc051ac005a9c1a4261714#945f36465ff604defcdc051ac005a9c1a4261714"
 dependencies = [
  "anyhow",
  "semver",
@@ -630,7 +630,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-package"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=751161e3217e90400b64ffaf25013dcff7ba1a59#751161e3217e90400b64ffaf25013dcff7ba1a59"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=945f36465ff604defcdc051ac005a9c1a4261714#945f36465ff604defcdc051ac005a9c1a4261714"
 dependencies = [
  "anyhow",
  "az-plugin-manifest",

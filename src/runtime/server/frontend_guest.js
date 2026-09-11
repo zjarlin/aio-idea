@@ -18,5 +18,11 @@
     if (event.data.error) item.reject(new Error(event.data.error));
     else item.resolve(event.data.response);
   });
-  Object.defineProperty(window, "aioPlugin", { value: Object.freeze({ request }), writable: false, configurable: false });
+  const json = async (method, path, value) => {
+    const response = await request({ method, path, body: value === undefined ? "" : JSON.stringify(value) });
+    const result = response.body ? JSON.parse(response.body) : null;
+    if (response.status < 200 || response.status >= 300) throw new Error(result?.error || `HTTP ${response.status}`);
+    return result;
+  };
+  Object.defineProperty(window, "aioPlugin", { value: Object.freeze({ request, json }), writable: false, configurable: false });
 })();
