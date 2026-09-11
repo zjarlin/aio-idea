@@ -1,7 +1,5 @@
+plugins = []
+
 [application]
 name = "aio-idea"
 title = "AIO IDEA"
-
-[[plugins]]
-git = "https://github.com/zjarlin/aio-plugin-hello.git"
-rev = "ebf4548f48bdc2dec9a2ef1741cb686af189651f"

@@ -14,6 +14,9 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::{plugins, runtime};
 
+#[cfg(test)]
+mod admin_browser_tests;
+
 pub async fn run() -> Result<()> {
     let port = env::var("AIO_WEB_PORT")
         .unwrap_or_else(|_| "8080".to_owned())

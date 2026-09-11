@@ -72,7 +72,7 @@ async fn mounts_real_dioxus_binary_and_calls_component_over_browser_bridge() -> 
         repository: Arc::new(RepositoryInstaller::new(temporary.path().join("cache"))),
         identity,
         marketplace_url: String::new(),
-        marketplace_syncing: Arc::new(Mutex::new(HashSet::new())),
+        marketplace_syncing: Arc::new(Mutex::new(HashSet::from([String::new()]))),
         activation_locks: Arc::new(Mutex::new(HashMap::new())),
         publication_slots: Arc::new(tokio::sync::Semaphore::new(2)),
         frontend: Arc::new(FrontendAccess::new(&base)?),

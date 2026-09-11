@@ -18,6 +18,29 @@ pub(super) struct RegistryRequest {
     source: String,
 }
 
+pub(super) async fn list_registries(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+) -> Result<Json<RuntimeResponse<Vec<String>>>, RuntimeError> {
+    let session = authenticate_manager(&state, &headers).await?;
+    Ok(Json(RuntimeResponse {
+        data: state.store.registry_sources(&session.tenant_id).await?,
+    }))
+}
+
+pub(super) async fn remove_registry(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Json(request): Json<RegistryRequest>,
+) -> Result<StatusCode, RuntimeError> {
+    let session = authenticate_manager(&state, &headers).await?;
+    state
+        .store
+        .remove_registry(&session.tenant_id, request.source.trim())
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub(super) async fn add_registry(
     State(state): State<RuntimeState>,
     headers: HeaderMap,

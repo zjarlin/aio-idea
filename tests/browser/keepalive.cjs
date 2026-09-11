@@ -27,7 +27,7 @@ function reset() {
     catalog: {
       context: 'session-a', tenant: { id: 'test', label: 'Test' },
       user: { label: 'Tester', handle: '@tester', initials: 'T' }, plugins: [],
-      pages: [screen('Compose 保活', { kind: 'frontend', entry: 'index.html' }), ...Array.from({ length: 7 }, (_, i) => screen(`页面 ${i}`)), screen('独立账户页')],
+      pages: [{ ...screen('测试工作区'), scene: { id: 'workspace', label: '工作区' } }, screen('Compose 保活', { kind: 'frontend', entry: 'index.html' }), ...Array.from({ length: 7 }, (_, i) => screen(`页面 ${i}`)), screen('独立账户页')],
       page_versions: { 'Compose 保活': 'version-a' },
       account_items: [{ id: 'test-account', label: '独立账户页', page_id: '独立账户页', required_permission: null }],
     },

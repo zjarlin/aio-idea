@@ -1,4 +1,6 @@
 mod activation_store;
+#[cfg(test)]
+mod admin_test_support;
 mod frontend_access;
 #[cfg(test)]
 mod frontend_browser_tests;

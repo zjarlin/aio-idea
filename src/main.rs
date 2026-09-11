@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-#[cfg(any(feature = "web", feature = "desktop"))]
-mod pages;
 mod plugins;
 mod runtime;
 #[cfg(feature = "server")]

@@ -16,7 +16,10 @@ use super::{
         prepare_bound_wasm, prepare_process_revision, restore_process_binding,
         stop_previous_process,
     },
-    management::{add_registry, create_publish_credential, revoke_publish_credential},
+    management::{
+        add_registry, create_publish_credential, list_registries, remove_registry,
+        revoke_publish_credential,
+    },
     marketplace_store::PUBLISHED_REGISTRY_SOURCE,
     publication::{authorize_upload, download_package, publish},
     request_context::{
@@ -52,7 +55,12 @@ pub fn router(state: RuntimeState) -> Router {
         .route("/api/runtime/catalog", get(catalog))
         .route("/api/runtime/pages/action", post(page_action))
         .route("/api/runtime/marketplace", get(marketplace))
-        .route("/api/runtime/registries", post(add_registry))
+        .route(
+            "/api/runtime/registries",
+            get(list_registries)
+                .post(add_registry)
+                .delete(remove_registry),
+        )
         .route("/api/runtime/plugins/install", post(install))
         .route("/api/runtime/publish-jobs/{job_id}", get(publish_job))
         .route(

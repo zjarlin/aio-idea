@@ -360,6 +360,17 @@ impl PluginStore {
             .bind(tenant_id).fetch_all(&self.pool).await.map_err(Into::into)
     }
 
+    pub async fn remove_registry(&self, tenant_id: &str, source: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE plugin_registries SET enabled = FALSE WHERE tenant_id = $1 AND source = $2",
+        )
+        .bind(tenant_id)
+        .bind(source)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn add_registry(&self, tenant_id: &str, source: &str) -> Result<()> {
         sqlx::query("INSERT INTO plugin_registries (id, tenant_id, source) VALUES ($1, $2, $3) ON CONFLICT (tenant_id, source) DO UPDATE SET enabled = TRUE")
             .bind(uuid::Uuid::new_v4().to_string()).bind(tenant_id).bind(source).execute(&self.pool).await?;

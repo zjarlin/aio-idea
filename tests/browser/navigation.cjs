@@ -25,10 +25,9 @@ async function authenticate(context, page) {
     await page.getByLabel("账号", { exact: true }).fill(process.env.AIO_ACCOUNT);
     await page.getByLabel("密码", { exact: true }).fill(process.env.AIO_PASSWORD);
     const login = page.waitForResponse((response) => response.url().endsWith("/api/auth/login"));
-    const reload = page.waitForNavigation({ waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "登录", exact: true }).click();
     assert((await login).ok(), "登录请求失败");
-    await reload;
+    await page.locator('.application-shell:visible').waitFor();
   }
   if (process.env.AIO_TENANT_ID) {
     const response = await context.request.post(`${baseURL}/api/tenants/switch`, { data: { tenant_id: process.env.AIO_TENANT_ID } });
@@ -67,9 +66,7 @@ async function scenario(browser, mobile) {
   await context.route("**/api/runtime/catalog", async (route) => {
     const response = await route.fetch();
     const catalog = await response.json();
-    if (!catalog.data.pages.some((page) => page.label === "Hello")) {
-      catalog.data.pages.push({ id: "navigation-hello-test", label: "Hello", icon: null, scene: { id: "workspace", label: "工作区" }, menu_path: [], required_permission: null, body: { kind: "text", title: "Hello", content: "导航测试" } });
-    }
+    catalog.data.pages.push({ id: "navigation-workspace-test", label: "测试工作区", icon: null, scene: { id: "workspace", label: "工作区" }, menu_path: [], required_permission: null, body: { kind: "text", title: "测试工作区", content: "导航测试" } });
     catalog.data.pages.push({ id: "navigation-state-test", label: "导航状态", icon: null, scene: { id: "community", label: "社区插件" }, menu_path: [], required_permission: null, body: { kind: "counter", title: "导航状态", button: "状态 +1" } });
     catalog.data.pages.push({ id: "account-extension-test", label: "社区账户扩展", icon: null, scene: { id: "community", label: "社区插件" }, menu_path: [], required_permission: null, body: { kind: "counter", title: "社区账户扩展", button: "扩展 +1" } });
     catalog.data.account_items.push({ id: "open-account-extension-test", label: "社区账户扩展", icon: null, page_id: "account-extension-test", required_permission: null });
@@ -85,7 +82,8 @@ async function scenario(browser, mobile) {
     const sceneTabs = page.getByRole("navigation", { name: "场景" });
     const labels = (container) => container.locator(".application-shell__navigation-button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
     const menus = () => labels(sidebar);
-    assert.deepEqual(await menus(), ["首页", "Hello"]);
+    await sceneTabs.getByRole("button", { name: "工作区", exact: true }).click();
+    assert.deepEqual(await menus(), ["测试工作区"]);
     assert.equal(await sidebar.locator(".application-shell__navigation-heading").count(), 0);
     for (const label of ["个人资料", "设置中心", "插件市场", "租户管理", "社区账户扩展"]) {
       assert.equal(await sidebar.getByRole("button", { name: label, exact: true }).count(), 0);
@@ -137,7 +135,7 @@ async function scenario(browser, mobile) {
 
     for (const label of ["个人资料", "设置中心", "插件市场", "切换租户", "社区账户扩展"]) {
       await openAccountPage(page, label, mobile);
-      await page.locator(".application-fullscreen:visible .application-fullscreen__content h2").first().waitFor();
+      await page.locator(".application-fullscreen:visible .application-fullscreen__content").getByRole('heading').first().waitFor();
       await page.waitForFunction(() => [...document.querySelectorAll(".application-fullscreen__content")].filter(element => element.checkVisibility()).every(element => !element.innerText.includes("正在读取")));
       assert.equal(await page.locator('.application-fullscreen:visible [role="alert"]').count(), 0);
       if (label === "社区账户扩展") {

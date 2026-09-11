@@ -11,7 +11,6 @@ pub fn client_catalog() -> anyhow::Result<ClientCatalog> {
     use dill::{Catalog, CatalogBuilder};
 
     let mut builder = CatalogBuilder::new();
-    crate::pages::home::register(&mut builder);
     aio_plugin_identity_client::register(&mut builder);
     aio_plugin_marketplace_client::register(&mut builder);
     aio_plugin_rbac_client::register(&mut builder);
@@ -82,7 +81,6 @@ mod tests {
             .collect::<HashSet<_>>();
 
         for page_id in [
-            "home",
             "users",
             "roles",
             "dictionary-management",
@@ -94,6 +92,7 @@ mod tests {
         ] {
             assert!(page_ids.contains(page_id), "缺少系统页面: {page_id}");
         }
+        assert!(!page_ids.contains("home"), "壳不能贡献内置首页");
 
         let users = catalog
             .pages
