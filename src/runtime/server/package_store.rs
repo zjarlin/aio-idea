@@ -114,6 +114,7 @@ impl PluginStore {
             .marketplace
             .context("已发布插件包缺少市场元数据")?;
         Ok(Some(crate::runtime::MarketplaceEntry {
+            parent_git: None,
             git: git.to_owned(),
             rev: revision.to_owned(),
             title: metadata.title,

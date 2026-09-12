@@ -8,6 +8,8 @@ pub(super) struct MountRequest {
 
 #[derive(Serialize)]
 pub(super) struct MountResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abi: Option<u32>,
     pub token: String,
     pub src: String,
     pub revision: String,

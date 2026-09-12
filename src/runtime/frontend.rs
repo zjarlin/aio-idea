@@ -6,6 +6,8 @@ use az_ui_components::button::{Button, ButtonVariant};
 
 #[derive(Clone, Deserialize, PartialEq)]
 struct FrontendMount {
+    #[serde(default)]
+    abi: Option<u32>,
     token: String,
     src: String,
     revision: String,
@@ -87,11 +89,13 @@ fn MountedFrontend(
             title: label,
             class: "w-full border-0",
             height: "640",
-            "sandbox": "allow-scripts",
+            "sandbox": "allow-scripts allow-forms",
+            allow: "fullscreen; clipboard-write",
             referrerpolicy: "no-referrer",
             onmounted: move |_| {
                 if bridge().is_none() {
-                    let mut evaluator = document::eval(concat!(include_str!("frontend_cache.js"), "\n", include_str!("frontend_host.js")));
+                    let script = if mount.abi == Some(2) { include_str!("frontend_component.js") } else { concat!(include_str!("frontend_cache.js"), "\n", include_str!("frontend_host.js")) };
+                    let mut evaluator = document::eval(script);
                     match evaluator.send(config.clone()) {
                         Ok(()) => {
                             bridge.set(Some(evaluator));

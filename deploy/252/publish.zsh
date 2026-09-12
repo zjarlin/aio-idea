@@ -33,10 +33,16 @@ cleanup() {
 trap cleanup EXIT
 
 git -C "$repository" worktree add --detach "$workspace/source" "$revision"
-git -C "$workspace/source" submodule update --init --recursive
+git -C "$workspace/source" -c protocol.file.allow=always \
+    -c "submodule.lib/dioxus-admin-workbench.url=$repository/lib/dioxus-admin-workbench" \
+    submodule update --init --recursive
 
 cd "$workspace/source"
-export CARGO_TARGET_DIR="$workspace/source/target"
+export CARGO_TARGET_DIR="${AIO_DEPLOY_TARGET_DIR:-$workspace/source/target}"
+if [[ "$CARGO_TARGET_DIR" != /* ]]; then
+    print -u2 "AIO_DEPLOY_TARGET_DIR 必须是绝对路径"
+    exit 64
+fi
 
 print "验证服务端"
 cargo test --no-default-features --features server
@@ -47,12 +53,12 @@ cargo zigbuild --release --target "$target" --no-default-features --features ser
 print "构建 Web 资产"
 dx build --platform web --release --debug-symbols false
 npm ci --prefix deploy --ignore-scripts --no-audit --no-fund
-node deploy/prepare-web.cjs
+node deploy/prepare-web.cjs "$CARGO_TARGET_DIR/dx/aio-idea/release/web/public"
 
 readonly release="$artifact/release"
 mkdir -p "$release"
 cp "$CARGO_TARGET_DIR/$target_directory/release/aio-idea" "$release/aio-idea"
-cp -R target/dx/aio-idea/release/web/public "$release/web"
+cp -R "$CARGO_TARGET_DIR/dx/aio-idea/release/web/public" "$release/web"
 cp aio.toml "$release/aio.toml"
 mkdir -p "$release/systemd"
 cp deploy/aio-plugin-supervisor.service "$release/systemd/aio-plugin-supervisor.service"

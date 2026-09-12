@@ -42,6 +42,7 @@ async fn binary_cli_publishes_downloads_recovers_and_rolls_back_over_http() -> R
     let store = Arc::new(PluginStore::new(pool.clone()));
     store.migrate().await?;
     let state = RuntimeState {
+        components: None,
         store,
         repository: Arc::new(RepositoryInstaller::new(cache.clone())),
         identity,

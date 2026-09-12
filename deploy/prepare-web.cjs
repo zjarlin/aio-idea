@@ -5,11 +5,23 @@ const {gzipSync} = require('node:zlib');
 const {parse, serialize} = require('parse5');
 const root = path.resolve(process.argv[2] || 'target/dx/aio-idea/release/web/public');
 const assets = path.join(root, 'assets');
-const wasm = fs.readdirSync(assets).filter(name => /^aio-idea_bg-dxh[a-f0-9]+\.wasm$/.test(name));
-assert.equal(wasm.length, 1, 'Prepare the fresh build before merging historical release assets');
 const file = path.join(root, 'index.html');
 const document = parse(fs.readFileSync(file, 'utf8'));
 const head = document.childNodes.find(node => node.tagName === 'html').childNodes.find(node => node.tagName === 'head');
+const scripts=[];
+function visit(node){
+  if(node.tagName==='script'&&node.attrs.some(a=>a.name==='type'&&a.value==='module')){
+    const src=node.attrs.find(a=>a.name==='src')?.value;
+    if(src){const url=new URL(src,'https://build.invalid/');const name=path.posix.basename(url.pathname);
+      if(url.origin==='https://build.invalid'&&/^aio-idea-dxh[a-f0-9]+\.js$/.test(name))scripts.push(fs.readFileSync(path.join(assets,name),'utf8'));
+    }
+  }
+  for(const child of node.childNodes||[])visit(child);
+}
+visit(document);
+assert.equal(scripts.length,1,'The current HTML must reference exactly one shell module');
+const wasm=fs.readdirSync(assets).filter(name=>/^aio-idea_bg-dxh[a-f0-9]+\.wasm$/.test(name)&&scripts[0].includes(name));
+assert.equal(wasm.length,1,'The current shell module must reference exactly one Wasm asset');
 const href = `/assets/${wasm[0]}`;
 const styles = fs.readdirSync(assets).filter(name => /-dxh[a-f0-9]+\.css$/.test(name));
 for (const attributes of [{rel: 'preload', as: 'fetch', type: 'application/wasm', href, crossorigin: ''},

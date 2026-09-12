@@ -151,6 +151,7 @@ fn marketplace_entry_from_row(row: PgRow) -> Result<MarketplaceEntry> {
         .map(parse_runtime)
         .transpose()?;
     Ok(MarketplaceEntry {
+        parent_git: None,
         git: row.try_get("git")?,
         rev: row.try_get("rev")?,
         title: row.try_get("title")?,

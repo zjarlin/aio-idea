@@ -21,6 +21,20 @@ pub(super) async fn install(
     tenant_id: &str,
     request: &InstallPluginRequest,
 ) -> Result<ActivatedPlugin> {
+    if let Some(components) = &state.components
+        && let Some((source, bundle)) = components
+            .published(&request.git, request.rev.as_deref())
+            .await?
+    {
+        components
+            .install(tenant_id, &request.git, request.rev.as_deref())
+            .await?;
+        return Ok(ActivatedPlugin {
+            source_id: source.to_string(),
+            revision: bundle.digest,
+            page_count: components.page_count(tenant_id, source).await?,
+        });
+    }
     let publication = state
         .store
         .published_marketplace_entry(&request.git, request.rev.as_deref())

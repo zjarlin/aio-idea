@@ -126,6 +126,8 @@ pub struct PublishedPluginView {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg(feature = "server")]
 pub struct MarketplaceEntry {
+    #[serde(default)]
+    pub parent_git: Option<String>,
     pub git: String,
     pub rev: String,
     pub title: String,

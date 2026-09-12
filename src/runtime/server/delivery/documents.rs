@@ -46,6 +46,11 @@ pub(super) async fn details(
     Path(revision): Path<String>,
 ) -> Result<Json<RuntimeResponse<serde_json::Value>>, RuntimeError> {
     let session = authenticate(&state, &headers).await?;
+    if let Some(components) = &state.components
+        && let Some(data) = components.details(&revision).await?
+    {
+        return Ok(Json(RuntimeResponse { data }));
+    }
     let package = sqlx::query("SELECT p.git,p.version,p.source_revision,p.created_at::TEXT,d.readme FROM plugin_packages p LEFT JOIN plugin_documents d ON d.revision=p.revision WHERE p.revision=$1 AND EXISTS(SELECT 1 FROM plugin_revisions r WHERE r.revision=p.revision)")
         .bind(&revision).fetch_optional(&state.store.pool).await?;
     let Some(package) = package else {

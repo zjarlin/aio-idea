@@ -31,4 +31,16 @@ curl --fail https://aio.addzero.site/health
 
 发布器拒绝未提交的工作树和非完整 SHA。它会在本地分别执行服务端测试、Web 检查、glibc 2.17 服务端构建和 Web 构建，将候选二进制、前端资源、`aio.toml` 和两项 systemd 单元上传到远端临时目录。切换前会备份现有 unit 与 enabled 状态；候选服务只有在 `aio-idea.service` 的 `MainPID` 确实执行当前 release 二进制后，本机 `/health` 才会被接受，随后还必须在 60 秒内通过公网健康检查。任一步失败都会恢复旧链接、unit、enabled 状态和服务，并删除失败发布目录。
 
+可以用绝对路径 `AIO_DEPLOY_TARGET_DIR` 复用本机 Cargo 编译缓存；源码仍来自完整 SHA 的隔离 worktree，所有测试及构建照常执行。
+
+## 原生 v2 Component
+
+`component-storage.cjs backup` 保存宿主 PostgreSQL 的 custom 格式备份及 SHA-256；`rehearse` 将其还原到独立本机数据库，并停用副本里的旧插件和发布任务。`tests/browser/component-preview.cjs` 只接受该副本，开发身份来自已有登录会话。
+
+首次上线先完成副本验收，再运行 `component-storage.cjs provision` 创建专用数据库 `aio_plugin_components`、撤销 PUBLIC schema 权限、备份并更新服务器环境文件。密钥和对象保存在 `/opt/aio-idea/component-storage`，发布和回退不删除此目录。纯 Component 环境没有启用进程插件时，不要求 Docker 监督器在线。
+
+原生整包上传到 `POST /api/runtime/components/publish`，类型为 `application/vnd.aio.component+gzip`，沿用平台来源发布者身份。通过真实 WIT、Wasmtime、迁移及健康检查后出现在可安装列表，发布操作不会自动安装。子插件通过清单 `plugin.marketplace.parent` 绑定父仓库；必须先启用同租户父插件，子插件由用户独立选择安装，卸载父插件前须卸载子插件。
+
+浏览器验收：先构建服务端与 Web，启动副本宿主，再设置 `NODE_PATH` 为已安装 Playwright 的依赖目录、`AIO_COOKIE_FILE` 为有效会话 Cookie 文件，运行 `node tests/browser/component-marketplace.cjs`。报告和桌面、手机截图位于 `target/component-delivery/rehearsal/`。`AIO_URL` 可以指向正式宿主；正式验收最后卸载本次安装，使大屏保留在可安装列表。测试失败信息不输出 Cookie。
+
 这条路径是受控发布器，不是公网 Git 安装器。公网运行时只安装已构建的 `wasm-component`、`page-definition` 与受限 `process` 产物，安装过程不会执行仓库脚本。CI 同时上传原始 Git commit 和所需 tree 对象；服务端离线校验对象哈希及清单、artifact 的提交归属，无需为发布回连远程 Git。健康检查和激活成功后才更新数据库市场条目。

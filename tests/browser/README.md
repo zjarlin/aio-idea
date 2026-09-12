@@ -44,3 +44,7 @@ AIO_TEST_KMP_FRONTEND=../aio-plugin-kmp-example/dist/frontend node tests/browser
 截图和测量写到 `target/keepalive-test`。真实 PostgreSQL HTTP 测试还覆盖票据续期、元数据复用，以及权限撤销后带 ETag 的请求仍被拒绝。
 
 设置 `AIO_KEEPALIVE_PREVIEW_PORT=4196` 可保留本地交互预览。此模式使用模拟会话和 API，只验证真实 Compose 绘制及壳导航，不代表实际登录、存储或后端服务。
+
+## Component 市场验收
+
+`component-marketplace.cjs` 上传大屏原生整包，通过市场 UI 安装，导入 CSV、拖拽绑定、保存发布、刷新和手机播放，再验证坏包拒绝并卸载。图表检查读取 canvas 像素，报告保存在 `target/component-delivery/`。`component-preview.cjs` 启动隔离数据库副本，只绑定回环地址。副本准备与正式发布见 `deploy/252/README.md`。运行需要 Playwright、Chrome 和私有 `AIO_COOKIE_FILE`，错误日志不输出 Cookie。

@@ -29,6 +29,11 @@ pub(super) async fn mount(
     Json(request): Json<MountRequest>,
 ) -> Result<Json<RuntimeResponse<MountResponse>>, RuntimeError> {
     let session = authenticate(&state, &headers).await?;
+    if request.page_id.starts_with("component:") {
+        return Ok(Json(RuntimeResponse {
+            data: super::components::mount(&state, &headers, &session, &request.page_id).await?,
+        }));
+    }
     let _slot = request_slot(&state)?;
     let binding = page(&state, &session, &request.page_id).await?;
     let source_id = binding.source_id.clone();
@@ -64,6 +69,7 @@ pub(super) async fn mount(
     let token = state.frontend.issue(grant)?;
     Ok(Json(RuntimeResponse {
         data: MountResponse {
+            abi: None,
             src: format!("/api/runtime/frontend/assets/{token}/{entry}"),
             token,
             revision: binding.service.revision,
