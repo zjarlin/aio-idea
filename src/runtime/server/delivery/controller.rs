@@ -16,6 +16,7 @@ pub(in crate::runtime::server) fn router() -> Router<RuntimeState> {
     Router::new()
         .route("/api/internal/delivery/claim", post(claim))
         .route("/api/internal/delivery/retained-jobs", post(retained_jobs))
+        .route("/api/internal/delivery/jobs/{id}/defer", post(defer))
         .route(
             "/api/internal/delivery/jobs/{id}/heartbeat",
             post(heartbeat),
@@ -75,6 +76,29 @@ async fn retained_jobs(
 #[derive(Deserialize)]
 struct Lease {
     lease: String,
+}
+
+#[derive(Deserialize)]
+struct DeferredBuild {
+    lease: String,
+    error: String,
+}
+
+async fn defer(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(request): Json<DeferredBuild>,
+) -> Result<StatusCode, RuntimeError> {
+    authorize(&headers)?;
+    let updated = sqlx::query("UPDATE delivery_jobs j SET state='queued',error=$3,lease=NULL,lease_until=NULL,retry_count=retry_count+1,next_attempt_at=now()+make_interval(secs=>LEAST(300,30*power(2,LEAST(retry_count,4)))::double precision),updated_at=now() WHERE id=$1 AND lease=$2 AND lease_until>now() AND state IN ('building','uploaded') AND EXISTS(SELECT 1 FROM delivery_sources s WHERE s.git=j.git AND s.desired_sha=j.source_revision AND s.enabled)")
+        .bind(id).bind(request.lease).bind(request.error.chars().take(16000).collect::<String>())
+        .execute(&state.store.pool).await?.rows_affected();
+    Ok(if updated == 1 {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::CONFLICT
+    })
 }
 
 async fn heartbeat(
@@ -178,7 +202,7 @@ async fn retry(
     Path(id): Path<i64>,
 ) -> Result<StatusCode, RuntimeError> {
     super::super::request_context::authenticate_publish_manager(&state, &headers).await?;
-    let row = sqlx::query("UPDATE delivery_jobs j SET state='queued',error=NULL,lease=NULL,lease_until=NULL WHERE id=$1 AND state='failed' AND EXISTS(SELECT 1 FROM delivery_sources s WHERE s.git=j.git AND s.desired_sha=j.source_revision AND s.enabled) RETURNING id").bind(id).fetch_optional(&state.store.pool).await?;
+    let row = sqlx::query("UPDATE delivery_jobs j SET state='queued',error=NULL,lease=NULL,lease_until=NULL,retry_count=0,next_attempt_at=now(),updated_at=now() WHERE id=$1 AND state='failed' AND EXISTS(SELECT 1 FROM delivery_sources s WHERE s.git=j.git AND s.desired_sha=j.source_revision AND s.enabled) RETURNING id").bind(id).fetch_optional(&state.store.pool).await?;
     if row.is_none() {
         return Err(RuntimeError::bad_request("仅可重试当前目标提交的失败任务"));
     }

@@ -20,6 +20,58 @@ pub(in crate::runtime::server) async fn exercise_rollouts(
         uuid::Uuid::new_v4().simple()
     );
     let first_job = target(state, &client, base, &token, &git, 1).await?;
+    client
+        .post(format!(
+            "{base}/api/internal/delivery/jobs/{}/defer",
+            first_job.id
+        ))
+        .bearer_auth(&token)
+        .json(&json!({"lease":first_job.lease,"error":"下载暂时不可用"}))
+        .send()
+        .await?
+        .error_for_status()?;
+    let pending = client
+        .post(format!("{base}/api/internal/delivery/claim"))
+        .bearer_auth(&token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Option<BuildJob>>()
+        .await?;
+    assert!(pending.is_none(), "退避中的任务不能立即重复领取");
+    let independent_git = format!("{git}-independent");
+    let independent = target(state, &client, base, &token, &independent_git, 1).await?;
+    assert_eq!(independent.git, independent_git, "网络失败不得阻塞其他插件");
+    client
+        .post(format!(
+            "{base}/api/internal/delivery/jobs/{}/complete",
+            independent.id
+        ))
+        .bearer_auth(&token)
+        .json(&BuildReport {
+            lease: independent.lease,
+            error: Some("测试结束".into()),
+            documentation: Documentation::default(),
+        })
+        .send()
+        .await?
+        .error_for_status()?;
+    sqlx::query("UPDATE delivery_jobs SET next_attempt_at=now() WHERE id=$1")
+        .bind(first_job.id)
+        .execute(&state.store.pool)
+        .await?;
+    let resumed = client
+        .post(format!("{base}/api/internal/delivery/claim"))
+        .bearer_auth(&token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Option<BuildJob>>()
+        .await?
+        .context("退避结束后必须恢复")?;
+    assert_eq!(resumed.id, first_job.id);
+    assert_ne!(resumed.lease, first_job.lease);
+    let first_job = resumed;
     let first = publish(state, &client, base, &token, &first_job, manifest, pages).await?;
     let source = state
         .store

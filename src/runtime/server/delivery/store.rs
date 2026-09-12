@@ -19,7 +19,7 @@ pub(super) async fn claim(pool: &PgPool) -> Result<Option<BuildJob>> {
         return Ok(None);
     }
     let lease = uuid::Uuid::new_v4().to_string();
-    let row = sqlx::query("WITH candidate AS (SELECT j.id FROM delivery_jobs j JOIN delivery_sources s ON s.git=j.git AND s.desired_sha=j.source_revision WHERE (j.state='queued' OR (j.state IN ('building','uploaded') AND j.lease_until < now())) AND s.enabled ORDER BY j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1) UPDATE delivery_jobs j SET state=CASE WHEN package_revision IS NULL THEN 'building' ELSE 'uploaded' END, lease=$1, lease_until=now()+interval '5 minutes', updated_at=now() FROM candidate WHERE j.id=candidate.id RETURNING j.id,j.git,j.source_revision,j.recipe")
+    let row = sqlx::query("WITH candidate AS (SELECT j.id FROM delivery_jobs j JOIN delivery_sources s ON s.git=j.git AND s.desired_sha=j.source_revision WHERE (j.state='queued' OR (j.state IN ('building','uploaded') AND j.lease_until < now())) AND j.next_attempt_at<=now() AND s.enabled ORDER BY j.next_attempt_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1) UPDATE delivery_jobs j SET state=CASE WHEN package_revision IS NULL THEN 'building' ELSE 'uploaded' END, lease=$1, lease_until=now()+interval '5 minutes', updated_at=now() FROM candidate WHERE j.id=candidate.id RETURNING j.id,j.git,j.source_revision,j.recipe")
         .bind(&lease).fetch_optional(&mut *tx).await?;
     tx.commit().await?;
     row.map(|row| {

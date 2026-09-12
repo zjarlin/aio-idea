@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS plugin_documents (
     readme TEXT NOT NULL,
     images JSONB NOT NULL DEFAULT '{}'
 );
+ALTER TABLE delivery_jobs ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE delivery_jobs ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE TABLE IF NOT EXISTS delivery_installations (
     tenant_id TEXT NOT NULL,
     source_id TEXT NOT NULL REFERENCES plugin_sources(id) ON DELETE CASCADE ON UPDATE CASCADE,
