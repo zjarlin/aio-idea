@@ -29,3 +29,15 @@ CREATE TABLE IF NOT EXISTS component_installations (
     PRIMARY KEY(tenant_id, source_id)
 );
 ALTER TABLE component_versions ADD COLUMN IF NOT EXISTS capabilities JSONB NOT NULL DEFAULT '{}';
+CREATE TABLE IF NOT EXISTS component_process_keys (
+    source_id UUID NOT NULL,
+    tenant_id TEXT NOT NULL,
+    ciphertext BYTEA NOT NULL,
+    PRIMARY KEY(source_id,tenant_id)
+);
+CREATE TABLE IF NOT EXISTS component_process_actors (
+    source_id UUID NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY(source_id,tenant_id,user_id)
+);

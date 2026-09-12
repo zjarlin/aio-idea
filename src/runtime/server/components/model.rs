@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct Description {
+    #[serde(default)]
+    pub process: bool,
     pub label: String,
     pub pages: Vec<Page>,
 }
@@ -21,6 +23,7 @@ pub(super) struct Page {
 impl From<metadata::Description> for Description {
     fn from(value: metadata::Description) -> Self {
         Self {
+            process: false,
             label: value.label,
             pages: value
                 .pages

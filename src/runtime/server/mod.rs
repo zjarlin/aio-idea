@@ -99,7 +99,7 @@ impl RuntimeState {
             let root = env::var_os("AIO_COMPONENT_HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| cache_root.join("components"));
-            Some(Arc::new(
+            Some(
                 components::Components::open(
                     store.pool.clone(),
                     &database,
@@ -107,7 +107,7 @@ impl RuntimeState {
                     root.join("objects"),
                 )
                 .await?,
-            ))
+            )
         } else {
             None
         };

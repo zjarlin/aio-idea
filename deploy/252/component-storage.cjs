@@ -24,6 +24,20 @@ function backup(){
   fs.writeFileSync(path.join(root,'backup.json'),JSON.stringify(report,null,2));
   console.log(JSON.stringify(report));
 }
+function backupComponents(){
+  const url=connection();url.pathname='/aio_plugin_components';
+  const file=path.join(root,`components-${Date.now()}.dump`);
+  execFileSync('pg_dump',['--format=custom','--file',file],{env:pgEnvironment(url),stdio:['ignore','ignore','pipe']});
+  const report={file,sha256:createHash('sha256').update(fs.readFileSync(file)).digest('hex'),bytes:fs.statSync(file).size};
+  remote(String.raw`const fs=require('fs');const cp=require('child_process');fs.mkdirSync('/opt/aio-idea/backups',{recursive:true,mode:0o700});cp.execFileSync('tar',['-C','/opt/aio-idea','-czf','/opt/aio-idea/backups/component-storage-'+Date.now()+'.tgz','component-storage']);console.log('Key storage backed up');`);
+  fs.writeFileSync(path.join(root,'components-backup.json'),JSON.stringify(report,null,2));
+  console.log(JSON.stringify(report));
+}
+function processes(){
+  const image=process.env.AIO_PROCESS_IMAGE;
+  if(!/^sha256:[a-f0-9]{64}$/.test(image||''))throw new Error('AIO_PROCESS_IMAGE must be the verified immutable image ID');
+  console.log(remote(String.raw`const fs=require('fs');const cp=require('child_process');const image='${image}';cp.execFileSync('docker',['image','inspect',image],{stdio:'ignore'});const p='/opt/aio-idea/process.env';fs.mkdirSync('/opt/aio-idea/backups',{recursive:true,mode:0o700});let text='';if(fs.existsSync(p)){text=fs.readFileSync(p,'utf8');fs.copyFileSync(p,'/opt/aio-idea/backups/process.env.'+Date.now());}const lines=text.split('\n').filter(Boolean);const values={AIO_PROCESS_ROOT:'/opt/aio-idea/process-storage',AIO_PROCESS_IMAGES:image,AIO_PROCESS_ENDPOINTS:'https://api.openai.com/v1'};for(const [key,value]of Object.entries(values)){const at=lines.findIndex(line=>line.startsWith(key+'='));if(at<0)lines.push(key+'='+value);else if(key==='AIO_PROCESS_ROOT'){if(lines[at]!==key+'='+value)throw Error('Existing process root differs');}else{const entries=new Set(lines[at].slice(key.length+1).split(','));entries.add(value);lines[at]=key+'='+[...entries].join(',');}}fs.writeFileSync(p,lines.join('\n')+'\n',{mode:0o600});cp.execFileSync('install',['-d','-o','aio-shell','-g','aio-shell','-m','0700',values.AIO_PROCESS_ROOT]);console.log('Process storage, image and model endpoint configured');`).trim());
+}
 function rehearse(){
   const saved=JSON.parse(fs.readFileSync(path.join(root,'backup.json'),'utf8'));
   if(createHash('sha256').update(fs.readFileSync(saved.file)).digest('hex')!==saved.sha256)throw new Error('Backup digest changed');
@@ -51,5 +65,5 @@ function provision(){
 }
 try {
   const action=process.argv[2];
-  if(action==='backup')backup();else if(action==='rehearse')rehearse();else if(action==='provision')provision();else throw new Error('Use backup, rehearse or provision');
+  if(action==='backup')backup();else if(action==='backup-components')backupComponents();else if(action==='processes')processes();else if(action==='rehearse')rehearse();else if(action==='provision')provision();else throw new Error('Use backup, backup-components, processes, rehearse or provision');
 }catch(error){console.error(error.stderr?.toString()||error.message);process.exitCode=1;}

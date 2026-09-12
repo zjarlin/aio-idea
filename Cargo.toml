@@ -9,9 +9,10 @@ az-plugin-delivery = { git = "https://github.com/zjarlin/aio-platform.git", rev 
 base64 = "0.22.1"
 anyhow = "1.0.99"
 async-trait = { version = "0.1", optional = true }
-az-plugin-bundle = { git = "https://github.com/zjarlin/aio-platform.git", rev = "c2d2714d69e22ffe6f09d12de690751f83a78dc7", optional = true }
-az-plugin-contract = { git = "https://github.com/zjarlin/aio-platform.git", rev = "c2d2714d69e22ffe6f09d12de690751f83a78dc7", optional = true }
-az-plugin-runtime = { git = "https://github.com/zjarlin/aio-platform.git", rev = "c2d2714d69e22ffe6f09d12de690751f83a78dc7", optional = true }
+futures-util = { version = "0.3", optional = true }
+az-plugin-bundle = { git = "https://github.com/zjarlin/aio-platform.git", rev = "13c6cdf8069ab9fded618b4a22e85b74341e7e6c", optional = true }
+az-plugin-contract = { git = "https://github.com/zjarlin/aio-platform.git", rev = "13c6cdf8069ab9fded618b4a22e85b74341e7e6c", optional = true }
+az-plugin-runtime = { git = "https://github.com/zjarlin/aio-platform.git", rev = "13c6cdf8069ab9fded618b4a22e85b74341e7e6c", optional = true }
 semver = { version = "1", optional = true }
 getrandom = { version = "0.4.2", optional = true }
 axum = { version = "0.8.6", optional = true }
@@ -25,7 +26,7 @@ gloo-net = { version = "0.6.0", features = ["http", "json"], optional = true }
 flate2 = { version = "1.1.2", optional = true }
 kuchikiki = { version = "=0.8.8-speedreader", optional = true }
 mime_guess = { version = "2.0.5", optional = true }
-reqwest = { version = "0.12.23", default-features = false, features = ["json", "rustls-tls"], optional = true }
+reqwest = { version = "0.12.23", default-features = false, features = ["json", "rustls-tls", "stream"], optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = { version = "0.10.9", optional = true }
@@ -53,7 +54,7 @@ aio_plugin_tenant_client = { package = "aio-plugin-tenant-client", git = "https:
 aio_plugin_tenant_server = { package = "aio-plugin-tenant-server", git = "https://github.com/zjarlin/aio-plugin-tenant.git", rev = "03b03a69c75cdf4a4eea3776a8d9a8a4a70ef827", optional = true }
 
 [features]
-components = ["dep:az-plugin-bundle", "dep:az-plugin-contract", "dep:az-plugin-runtime", "dep:async-trait", "dep:semver", "dep:getrandom"]
+components = ["dep:az-plugin-bundle", "dep:az-plugin-contract", "dep:az-plugin-runtime", "dep:async-trait", "dep:semver", "dep:getrandom", "dep:futures-util"]
 default = ["web"]
 ui = ["dep:dioxus", "dep:az-dioxus-admin-shell", "dep:az-ui-components"]
 web = ["ui", "dioxus/web", "dioxus/launch", "dep:gloo-net", "dep:web-sys", "dep:aio_plugin_account", "dep:aio_plugin_dictionary_client", "dep:aio_plugin_file_client", "dep:aio_plugin_identity_client", "dep:aio_plugin_marketplace_client", "dep:aio_plugin_rbac_client", "dep:aio_plugin_settings", "dep:aio_plugin_tenant_client"]

@@ -9,6 +9,7 @@ User=root
 Group=aio-shell
 UMask=0007
 WorkingDirectory=/opt/aio-idea/current
+EnvironmentFile=-/opt/aio-idea/process.env
 Environment=AIO_PLUGIN_CACHE=/opt/aio-idea/plugin-cache
 Environment=AIO_PLUGIN_SUPERVISOR_SOCKET=/run/aio-plugin-supervisor/supervisor.sock
 ExecStart=/opt/aio-idea/current/aio-idea supervisor

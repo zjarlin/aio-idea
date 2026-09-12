@@ -61,9 +61,11 @@ pub(in crate::runtime::server) async fn mount(
 ) -> Result<MountResponse> {
     let _permit = state.frontend.request_slot()?;
     let (source, revision, generation, page) = page(state, session, id).await?;
-    let slot = state.components()?.slot(source, &session.tenant_id).await?;
-    let snapshot = slot.snapshot().await?.context("插件实例不可用")?;
-    ensure!(snapshot.bundle.digest() == revision, "插件安装版本发生变化");
+    let bundle = state
+        .components()?
+        .bundle(source, &session.tenant_id)
+        .await?;
+    ensure!(bundle.digest() == revision, "插件安装版本发生变化");
     let entry = page.entry;
     let token = state.frontend.issue(FrontendGrant {
         cookie: headers
@@ -78,7 +80,7 @@ pub(in crate::runtime::server) async fn mount(
         activation_generation: generation.clone(),
         revision: revision.clone(),
         entry: entry.clone(),
-        frontend_path: snapshot.bundle.manifest().plugin.frontend.path.clone(),
+        frontend_path: bundle.manifest().plugin.frontend.path.clone(),
         assets: Default::default(),
         issued: Instant::now(),
     })?;
@@ -134,19 +136,17 @@ pub(super) async fn asset(
     cookie.insert(header::COOKIE, grant.cookie.clone());
     let session = authenticate(&state, &cookie).await?;
     let grant = validate(&state, &session, &token).await?;
-    let slot = state
+    let bundle = state
         .components()?
-        .slot(
+        .bundle(
             Uuid::parse_str(&grant.source_id).context("来源无效")?,
             &session.tenant_id,
         )
         .await?;
-    let snapshot = slot.snapshot().await?.context("插件实例不可用")?;
-    if snapshot.bundle.digest() != grant.revision {
+    if bundle.digest() != grant.revision {
         return Err(RuntimeError::forbidden("插件版本已撤销"));
     }
-    let bytes = snapshot
-        .bundle
+    let bytes = bundle
         .frontend(&path)
         .ok_or_else(|| RuntimeError::not_found("资产不属于当前插件包"))?;
     let prefix = format!(
@@ -246,14 +246,10 @@ pub(super) async fn request(
     let grant = validate(&state, &session, &token).await?;
     let components = state.components()?;
     let authorization = components.services.enter(&session)?;
-    let slot = components
-        .slot(
+    let response = components
+        .handle(
             Uuid::parse_str(&grant.source_id).context("来源无效")?,
             &session.tenant_id,
-        )
-        .await?;
-    let response = slot
-        .handle(
             &grant.revision,
             request.try_into()?,
             authorization.context.clone(),

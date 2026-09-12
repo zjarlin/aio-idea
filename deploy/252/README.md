@@ -20,6 +20,16 @@ curl --fail https://aio.addzero.site/health
 
 每个发布目录必须同时包含服务端二进制、`web/` 和 `aio.toml`。进程插件由 root 监督器在无外网的独立容器中运行，主壳只通过 Unix socket 调用监督器，不加入 Docker 用户组。Wasm Component 在宿主重启时按租户恢复，首次启动窗口配置为 300 秒以容纳跨语言 Component 冷启动。文件插件把内容写入发布目录之外的 `/opt/aio-idea/file-storage`，发布脚本负责创建并授权给 `aio-shell`；PostgreSQL 保存文件元数据。`credentials.json` 和只包含数据库连接、初始管理员密码的 `/opt/aio-idea/runtime.env` 是服务器私密文件，不进入 Git。首次启动必须设置 `AIO_BOOTSTRAP_PASSWORD`。发布凭据只能由 `AIO_PLUGIN_PUBLISH_ACCOUNTS` 明确列出的平台账号创建或撤销；普通租户管理员仍可安装和管理租户插件，但不能认领全局 Git 发布来源。
 
+## 原生 v2 Process
+
+Agent 使用原生 v2 整包中的 Linux ELF 与 Compose 前端，Pi SDK 依赖由预置 Node 镜像提供。宿主和监督器共同读取私有 `/opt/aio-idea/process.env`，以 `AIO_PROCESS_ROOT` 保存运行授权及 socket；加密主密钥仍由 Component keyring 管理。模型只能通过宿主 broker 访问清单及宿主共同批准的 HTTPS 基址，容器自身使用 `--network=none`。
+
+上线前运行 `component-storage.cjs backup` 和 `backup-components`，同时备份宿主数据库、插件数据库和宿主密钥目录。构建 Agent 仓库的 `Containerfile` 中 `runtime` 目标并核对不可变镜像 ID，然后设置 `AIO_PROCESS_IMAGE=sha256:...` 执行 `node deploy/252/component-storage.cjs processes`，登记预置镜像、模型地址和持久目录。模型未配置时仍接收加密资料，整理任务等待空间绑定模型。
+
+`process-rehearsal.cjs` 在 252 的 `/opt/aio-idea/process-test-20260913` 使用独立 PostgreSQL 集群恢复 `snapshot.dump`，避免同集群数据库角色名与生产冲突。`prepare` 恢复副本并停用复制的安装和发布任务；`start` 启动该目录里的候选二进制与独立监督器；`stop` 只终止该目录的进程。宿主使用 4245 回环端口。新旧监督器均校验自身目录归属，演练清理不会停止生产插件。
+
+通过演练后按下节发布宿主，再上传真实 Agent 整包，先安装父插件智能体，再安装智能体记忆。`tests/browser/agent-process.cjs publish` 执行发布和安装，默认命令验证对话与图谱，`resume` 验证重启后的同一批资料。设置 `AIO_AGENT_TEST_CLEANUP=1` 删除验收来源和会话；保留两个正式插件的安装。
+
 ## Rust Source 发布
 
 `rust-source` 会进入同一个 Rust 进程的 Dill 图，因此不能按租户在线替换。它和壳一起作为一个发布单元：先由受控发布端在隔离 worktree 中编译，随后原子切换整个版本。

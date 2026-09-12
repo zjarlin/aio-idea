@@ -9,6 +9,7 @@ User=aio-shell
 Group=aio-shell
 WorkingDirectory=/opt/aio-idea/current
 EnvironmentFile=-/opt/aio-idea/runtime.env
+EnvironmentFile=-/opt/aio-idea/process.env
 Environment=AIO_WEB_HOST=127.0.0.1
 Environment=AIO_WEB_PORT=3080
 Environment=AIO_WEB_DIST=/opt/aio-idea/current/web

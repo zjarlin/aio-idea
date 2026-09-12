@@ -81,6 +81,9 @@ pub async fn run() -> Result<()> {
         .route("/instances/start", post(start))
         .route("/instances/stop", post(stop))
         .route("/instances/reconcile", post(reconcile))
+        .route("/bundles/start", post(start_bundle))
+        .route("/bundles/stop", post(stop_bundle))
+        .route("/bundles/reconcile", post(reconcile_bundles))
         .with_state(state);
     let listener = tokio::net::UnixListener::bind(&socket)
         .with_context(|| format!("绑定监督器 socket 失败: {}", socket.display()))?;
@@ -107,6 +110,27 @@ async fn stop(
     Json(request): Json<StopProcessRequest>,
 ) -> Result<StatusCode, SupervisorError> {
     state.docker.stop(&request.instance_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn start_bundle(
+    Json(request): Json<super::components::process::Start>,
+) -> Result<StatusCode, SupervisorError> {
+    super::components::process::supervision::start(&request).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn stop_bundle(
+    Json(request): Json<super::components::process::Stop>,
+) -> Result<StatusCode, SupervisorError> {
+    super::components::process::supervision::stop(&request).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn reconcile_bundles(
+    Json(requests): Json<Vec<super::components::process::Start>>,
+) -> Result<StatusCode, SupervisorError> {
+    super::components::process::supervision::reconcile(&requests).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -167,6 +191,10 @@ impl DockerSupervisor {
 
         let instance_id = instance_id(request);
         if let Some(endpoint) = running_endpoint(&instance_id).await? {
+            ensure!(
+                self.owns(&instance_id).await?,
+                "process 实例属于其他宿主目录"
+            );
             if self.healthy(&endpoint, runtime).await {
                 return Ok(ProcessInstance {
                     instance_id,
@@ -187,6 +215,8 @@ impl DockerSupervisor {
             "bridge",
             "--label",
             "io.addzero.aio.managed=true",
+            "--label",
+            &format!("io.addzero.aio.cache={}", self.cache_root.display()),
             &network,
         ])
         .await
@@ -215,9 +245,31 @@ impl DockerSupervisor {
 
     async fn stop(&self, instance_id: &str) -> Result<()> {
         validate_instance_id(instance_id)?;
+        match self.owns(instance_id).await {
+            Ok(owned) => ensure!(owned, "不能停止其他宿主的 process"),
+            Err(error) if missing_docker_object(&error) => {}
+            Err(error) => return Err(error),
+        }
         ignore_missing(docker_output(["rm", "--force", &container_name(instance_id)]).await)?;
         ignore_missing(remove_network(&network_name(instance_id)).await)?;
         Ok(())
+    }
+
+    async fn owns(&self, instance_id: &str) -> Result<bool> {
+        let mounts = docker_output([
+            "inspect",
+            "--format",
+            "{{json .Mounts}}",
+            &container_name(instance_id),
+        ])
+        .await?;
+        let mounts: Vec<serde_json::Value> = serde_json::from_str(&mounts)?;
+        Ok(mounts.iter().any(|mount| {
+            mount["Destination"] == "/plugin"
+                && mount["Source"].as_str().is_some_and(|source| {
+                    Path::new(source).parent() == Some(self.cache_root.as_path())
+                })
+        }))
     }
 
     async fn reconcile(&self, instances: &[StartProcessRequest]) -> Result<()> {
@@ -236,13 +288,17 @@ impl DockerSupervisor {
         ])
         .await?;
         for instance_id in orphan_instance_ids(&containers, "aio-plugin-", &active) {
-            self.stop(&instance_id).await?;
+            if self.owns(&instance_id).await? {
+                self.stop(&instance_id).await?;
+            }
         }
         let networks = docker_output([
             "network",
             "ls",
             "--filter",
             "label=io.addzero.aio.managed=true",
+            "--filter",
+            &format!("label=io.addzero.aio.cache={}", self.cache_root.display()),
             "--format",
             "{{.Name}}",
         ])
@@ -428,7 +484,9 @@ async fn remove_network(network: &str) -> Result<String> {
     docker_output(["network", "rm", network]).await
 }
 
-async fn docker_output<'a>(arguments: impl IntoIterator<Item = &'a str>) -> Result<String> {
+pub(super) async fn docker_output<'a>(
+    arguments: impl IntoIterator<Item = &'a str>,
+) -> Result<String> {
     let arguments = arguments.into_iter().collect::<Vec<_>>();
     let output = tokio::time::timeout(
         Duration::from_secs(60),

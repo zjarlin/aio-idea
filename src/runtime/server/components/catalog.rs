@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 impl Components {
     pub async fn entries(&self, tenant: &str) -> Result<Vec<MarketplaceEntry>> {
-        let rows=sqlx::query("SELECT s.id,s.git,s.parent_git,p.digest,v.metadata,v.capabilities,i.digest AS installed_revision,i.enabled FROM component_sources s JOIN component_publications p ON p.source_id=s.id JOIN component_versions v ON v.digest=p.digest LEFT JOIN component_installations i ON i.source_id=s.id AND i.tenant_id=$1 ORDER BY v.metadata->>'title'").bind(tenant).fetch_all(&self.pool).await?;
+        let rows=sqlx::query("SELECT s.id,s.git,s.parent_git,p.digest,v.metadata,v.capabilities,v.description,i.digest AS installed_revision,i.enabled FROM component_sources s JOIN component_publications p ON p.source_id=s.id JOIN component_versions v ON v.digest=p.digest LEFT JOIN component_installations i ON i.source_id=s.id AND i.tenant_id=$1 ORDER BY v.metadata->>'title'").bind(tenant).fetch_all(&self.pool).await?;
         rows.into_iter()
             .map(|row| {
                 let metadata: az_plugin_bundle::MarketplaceManifest =
@@ -33,7 +33,13 @@ impl Components {
                         }
                     }),
                     active_revision,
-                    runtime: Some(PluginRuntime::WasmComponent),
+                    runtime: Some(
+                        if row.try_get::<serde_json::Value, _>("description")?["process"] == true {
+                            PluginRuntime::Process
+                        } else {
+                            PluginRuntime::WasmComponent
+                        },
+                    ),
                     capabilities: CapabilityManifest {
                         database: row.try_get::<serde_json::Value, _>("capabilities")?["database"]
                             .as_bool()
@@ -57,7 +63,11 @@ impl Components {
                 source_id: source.to_string(),
                 git: row.try_get("git")?,
                 revision: digest.clone(),
-                runtime: PluginRuntime::WasmComponent,
+                runtime: if row.try_get::<serde_json::Value, _>("description")?["process"] == true {
+                    PluginRuntime::Process
+                } else {
+                    PluginRuntime::WasmComponent
+                },
                 state: if enabled {
                     PluginState::Active
                 } else {

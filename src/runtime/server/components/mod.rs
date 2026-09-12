@@ -2,6 +2,8 @@ mod catalog;
 mod controller;
 mod frontend;
 mod model;
+pub(in crate::runtime::server) mod process;
+mod process_lifecycle;
 mod services;
 mod store;
 #[cfg(test)]
@@ -34,6 +36,7 @@ pub(super) struct Components {
     services: Arc<services::Services>,
     slots: Mutex<HashMap<(Uuid, String), Arc<PersistentComponentSlot>>>,
     pub mutations: Mutex<()>,
+    processes: process::Processes,
 }
 
 impl Components {
@@ -42,22 +45,33 @@ impl Components {
         database: &str,
         key_path: &Path,
         objects: PathBuf,
-    ) -> Result<Self> {
+    ) -> Result<Arc<Self>> {
         sqlx::raw_sql(include_str!("schema.sql"))
             .execute(&pool)
             .await?;
         let provisioner = DatabaseProvisioner::connect(database).await?;
         let keyring = Arc::new(load_keyring(key_path)?);
-        Ok(Self {
+        let engine = ComponentEngine::new()?;
+        let root = std::env::var_os("AIO_PROCESS_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                key_path
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join("processes")
+            });
+        let supervisor = process::Processes::client()?;
+        Ok(Arc::new_cyclic(|weak| Self {
             pool,
             provisioner,
-            engine: ComponentEngine::new()?,
+            engine,
             keyring,
             objects,
             services: Arc::default(),
             slots: Mutex::default(),
             mutations: Mutex::new(()),
-        })
+            processes: process::Processes::new(weak.clone(), root, supervisor),
+        }))
     }
 
     async fn resources(
@@ -126,6 +140,11 @@ impl Components {
         .fetch_all(&self.pool)
         .await?;
         for (source, tenant, digest, archive) in rows {
+            let bundle = Bundle::decode(&archive)?;
+            if bundle.verify()?.manifest().plugin.runtime.process.is_some() {
+                self.processes.activate(source, &tenant, &bundle).await?;
+                continue;
+            }
             let slot = self.slot(source, &tenant).await?;
             if slot
                 .snapshot()
@@ -135,17 +154,22 @@ impl Components {
                 continue;
             }
             // 安装记录是激活提交点，恢复被进程中断的跨库状态变更。
-            let bundle = Bundle::decode(&archive)?;
             let grants = bundle.verify()?.manifest().plugin.capabilities.clone();
             let resources = self.resources(source, &tenant, &bundle).await?;
             slot.activate(&self.engine, bundle, grants, resources)
                 .await?;
         }
+        self.processes.reconcile().await?;
         Ok(())
     }
 
     async fn validate(&self, source: Uuid, bundle: &Bundle) -> Result<model::Description> {
         let tenant = "component-publication-validation";
+        if bundle.verify()?.manifest().plugin.runtime.process.is_some() {
+            let (instance, description) = self.processes.prepare(source, tenant, bundle).await?;
+            self.processes.stop_id(&instance.start.id()).await?;
+            return Ok(description);
+        }
         let resources = self.resources(source, tenant, bundle).await?;
         let slot = ComponentSlot::new(
             source,
@@ -168,6 +192,9 @@ impl Components {
             .await?
             .context("插件尚未发布")?;
         self.require_parent(tenant, source).await?;
+        if bundle.verify()?.manifest().plugin.runtime.process.is_some() {
+            return self.install_process(tenant, source, bundle).await;
+        }
         let resources = self.resources(source, tenant, &bundle).await?;
         let grants = bundle.verify()?.manifest().plugin.capabilities.clone();
         let slot = self.slot(source, tenant).await?;
@@ -217,6 +244,11 @@ impl Components {
         self.require_no_children(tenant, source).await?;
         let installed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM component_installations WHERE source_id=$1 AND tenant_id=$2)").bind(source).bind(tenant).fetch_one(&self.pool).await?;
         ensure!(installed, "当前租户未安装插件");
+        if let Some(bundle) = self.installed_bundle(tenant, source).await?
+            && bundle.verify()?.manifest().plugin.runtime.process.is_some()
+        {
+            return self.change_process(tenant, source, action, bundle).await;
+        }
         let slot = self.slot(source, tenant).await?;
         let previous = slot.stored().await?;
         slot.deactivate().await?;

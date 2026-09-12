@@ -94,6 +94,7 @@ dependencies = [
  "dill",
  "dioxus",
  "flate2",
+ "futures-util",
  "getrandom 0.4.3",
  "gloo-net",
  "kuchikiki",
@@ -694,7 +695,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-bundle"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=c2d2714d69e22ffe6f09d12de690751f83a78dc7#c2d2714d69e22ffe6f09d12de690751f83a78dc7"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=13c6cdf8069ab9fded618b4a22e85b74341e7e6c#13c6cdf8069ab9fded618b4a22e85b74341e7e6c"
 dependencies = [
  "anyhow",
  "az-plugin-contract",
@@ -711,7 +712,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-contract"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=c2d2714d69e22ffe6f09d12de690751f83a78dc7#c2d2714d69e22ffe6f09d12de690751f83a78dc7"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=13c6cdf8069ab9fded618b4a22e85b74341e7e6c#13c6cdf8069ab9fded618b4a22e85b74341e7e6c"
 dependencies = [
  "serde",
  "serde_json",
@@ -761,7 +762,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-runtime"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=c2d2714d69e22ffe6f09d12de690751f83a78dc7#c2d2714d69e22ffe6f09d12de690751f83a78dc7"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=13c6cdf8069ab9fded618b4a22e85b74341e7e6c#13c6cdf8069ab9fded618b4a22e85b74341e7e6c"
 dependencies = [
  "aes-gcm",
  "anyhow",
