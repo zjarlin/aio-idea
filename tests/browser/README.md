@@ -52,3 +52,5 @@ AIO_TEST_KMP_FRONTEND=../aio-plugin-kmp-example/dist/frontend node tests/browser
 `component-marketplace.cjs` 上传大屏原生整包，通过市场 UI 安装，导入 CSV、拖拽绑定、保存发布、刷新和手机播放，再验证坏包拒绝并卸载。图表检查读取 canvas 像素，报告保存在 `target/component-delivery/`。`component-preview.cjs` 启动隔离数据库副本，只绑定回环地址。副本准备与正式发布见 `deploy/252/README.md`。运行需要 Playwright、Chrome 和私有 `AIO_COOKIE_FILE`，错误日志不输出 Cookie。
 
 `component-family.cjs` 发布真实 Agent Memory 整包，验证父仓库关系、树层级、折叠展开及父插件未启用时拒绝安装。它不创建占位父包，报告中的 `parentPublished` 明确记录真实 Agent 是否已发布。可用 `AIO_BROWSER_PROXY` 配置浏览器代理；本次公网交付结果见 `deploy/252/component-acceptance.md`。
+
+`plugin-names-live.cjs` 只读检查正式市场的中文插件名与父节点名称，验证桌面、手机的列表和详情，并将截图与结果保存到 `target/component-delivery/chinese-names/`。
