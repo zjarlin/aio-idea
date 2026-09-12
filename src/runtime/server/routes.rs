@@ -95,6 +95,7 @@ pub fn router(state: RuntimeState) -> Router {
         )
         .merge(super::delivery::router())
         .merge(super::components::router(state.clone()))
+        .merge(super::bootstrap::router())
         .with_state(state)
 }
 

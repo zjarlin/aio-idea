@@ -3,22 +3,7 @@ use az_plugin_manifest::PageActionDefinition;
 use az_ui_components::button::{Button, ButtonVariant};
 use dioxus::prelude::*;
 
-use super::{PageActionRequest, PageActionResult, PageBody, RuntimeCatalog, RuntimeResponse};
-
-pub async fn catalog() -> Result<RuntimeCatalog, String> {
-    let response = gloo_net::http::Request::get("/api/runtime/catalog")
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
-    if !response.ok() {
-        return Err(format!("HTTP {}", response.status()));
-    }
-    response
-        .json::<RuntimeResponse<RuntimeCatalog>>()
-        .await
-        .map(|response| response.data)
-        .map_err(|error| error.to_string())
-}
+use super::{PageActionRequest, PageActionResult, PageBody, RuntimeResponse};
 
 pub fn render_page(page: ApplicationRuntimePage) -> Element {
     let page_key = page.id.clone();

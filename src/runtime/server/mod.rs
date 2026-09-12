@@ -1,6 +1,9 @@
 mod activation_store;
 #[cfg(test)]
 mod admin_test_support;
+mod bootstrap;
+#[cfg(test)]
+mod bootstrap_tests;
 mod components;
 mod delivery;
 mod frontend_access;

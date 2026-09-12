@@ -4,6 +4,7 @@ mod plugins;
 mod runtime;
 #[cfg(feature = "server")]
 mod server;
+mod startup;
 
 #[cfg(all(feature = "server", any(feature = "web", feature = "desktop")))]
 compile_error!("server 不能和 web 或 desktop 同时启用");
@@ -36,30 +37,22 @@ fn App() -> dioxus::prelude::Element {
     };
     use dioxus::prelude::*;
 
-    let mut application = use_resource(|| async {
-        for _ in 0..2 {
-            let session = aio_plugin_identity_client::load_session().await?;
-            let catalog = match session.as_ref() {
-                Some(_) => Some(runtime::client::catalog().await?),
-                None => None,
-            };
-            if let (Some(session), Some(catalog)) = (&session, &catalog)
-                && session.tenant_id != catalog.tenant.id
-            {
-                continue;
-            }
-            return Ok((session, catalog));
-        }
-        Err::<_, String>("租户正在切换，请重试".to_owned())
+    let mut last_application = use_signal(|| None::<startup::LoadedApplication>);
+    let mut application = use_resource(move || {
+        let previous = last_application.peek().clone();
+        async move { startup::load(previous).await }
     });
-    let mut last_application = use_signal(|| None);
     use_effect(move || {
         if let Some(Ok(value)) = application.read().as_ref() {
             last_application.set(Some(value.clone()));
         }
     });
     use_effect(move || {
-        if matches!(application.read().as_ref(), Some(Ok((None, _)))) {
+        if application
+            .read()
+            .as_ref()
+            .is_some_and(|result| result.as_ref().is_ok_and(|value| value.snapshot.is_none()))
+        {
             spawn(async {
                 let _ = document::eval("if (typeof caches !== 'undefined') { await Promise.all((await caches.keys()).filter(name => name.startsWith('aio-plugin-assets-v1-')).map(name => caches.delete(name))); } return true;").await;
             });
@@ -67,13 +60,12 @@ fn App() -> dioxus::prelude::Element {
     });
     use_future(move || async move {
         loop {
-            if document::eval(include_str!("runtime/catalog_watch.js"))
-                .await
-                .is_err()
-            {
+            let Ok(reason) = document::eval(include_str!("runtime/catalog_watch.js")).await else {
                 break;
+            };
+            if application.finished() || reason.as_str() == Some("invalidated") {
+                application.restart();
             }
-            application.restart();
         }
     });
     let result = application.read().as_ref().cloned();
@@ -89,20 +81,27 @@ fn App() -> dioxus::prelude::Element {
         result => result,
     };
     let Some(application_result) = result else {
-        return standalone_page(rsx! { p { "正在验证会话" } });
+        return standalone_page(rsx! { p { role: "status", aria_busy: "true", "正在加载工作区" } });
     };
-    let (session, catalog) = match application_result {
-        Ok((Some(session), Some(catalog))) => (session, catalog),
-        Ok((None, _)) => {
+    let snapshot = match application_result {
+        Ok(startup::LoadedApplication {
+            snapshot: Some(snapshot),
+            ..
+        }) => snapshot,
+        Ok(startup::LoadedApplication { snapshot: None, .. }) => {
             return standalone_page(rsx! { aio_plugin_identity_client::LoginPage {} });
         }
-        Ok((Some(_), None)) => {
-            return standalone_page(rsx! { p { role: "alert", "插件目录没有返回数据" } });
-        }
         Err(error) => {
-            return standalone_page(rsx! { p { role: "alert", "验证会话失败: {error}" } });
+            return standalone_page(rsx! {
+                p { role: "alert", "{error}" }
+                az_ui_components::button::Button {
+                    onclick: move |_| application.restart(),
+                    "重试"
+                }
+            });
         }
     };
+    let catalog = snapshot.catalog;
     let mut static_plugins = match plugins::client_catalog() {
         Ok(value) => value,
         Err(error) => {
@@ -111,12 +110,12 @@ fn App() -> dioxus::prelude::Element {
     };
     static_plugins.pages.retain(|page| {
         page.required_permission
-            .is_none_or(|permission| session.permissions.iter().any(|item| item == permission))
+            .is_none_or(|permission| snapshot.permissions.iter().any(|item| item == permission))
     });
     static_plugins.account_items.retain(|item| {
         item.required_permission
             .as_deref()
-            .is_none_or(|permission| session.permissions.iter().any(|value| value == permission))
+            .is_none_or(|permission| snapshot.permissions.iter().any(|value| value == permission))
     });
     let mut account_items = static_plugins.account_items;
     account_items.extend(
@@ -127,7 +126,7 @@ fn App() -> dioxus::prelude::Element {
                 item.required_permission
                     .as_deref()
                     .is_none_or(|permission| {
-                        session
+                        snapshot
                             .permissions
                             .iter()
                             .any(|candidate| candidate == permission)
