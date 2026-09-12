@@ -83,7 +83,7 @@ async function run(browser, cookie, mobile) {
     assert.equal(await frame.locator('body').evaluate(() => window.__tenantCacheProbe), marker);
     assert.equal(downloads.length, before, 'A return must not fetch assets');
     const stale = await context.request.post(origin + `/api/runtime/frontend/${oldToken}/renew`);
-    assert([403, 404].includes(stale.status()), 'Old ticket must stay revoked after returning');
+    assert.equal(stale.status(), 401, 'Revoked tickets must remain unauthorized after returning');
     const backend = await frame.locator('body').evaluate(() => window.aioPlugin.json('GET', '/tasks'));
     assert.equal(backend.tenantId, original);
     console.log(`${mobile ? 'mobile' : 'desktop'}: tenant return and backend authorization verified`);
