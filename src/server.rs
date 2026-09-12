@@ -29,7 +29,6 @@ pub async fn run() -> Result<()> {
     let web_dist = env::var_os("AIO_WEB_DIST")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("target/dx/aio-idea/release/web/public"));
-    let application = static_files::application(web_dist);
     let plugin_catalog = plugins::server_catalog()?;
     let identity = aio_plugin_identity_server::service(&plugin_catalog)?;
     identity.initialize().await?;
@@ -43,6 +42,9 @@ pub async fn run() -> Result<()> {
         .initialize()
         .await?;
     let runtime = runtime::server::RuntimeState::initialize(identity).await?;
+    let application = static_files::application(web_dist).layer(
+        axum::middleware::from_fn_with_state(runtime.clone(), runtime::server::bootstrap_document),
+    );
     let router = Router::new()
         .route("/health", get(|| async { "ok" }))
         .merge(runtime::server::router(runtime))

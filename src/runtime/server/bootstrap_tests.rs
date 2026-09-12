@@ -23,7 +23,20 @@ async fn bootstrap_revalidates_permissions_and_logout_before_304() -> Result<()>
     let state =
         super::RuntimeState::isolated_admin_test(identity, &database, &base, temporary.path())
             .await?;
-    let router = super::router(state.clone()).merge(aio_plugin_identity_server::router(&catalog)?);
+    let homepage = axum::Router::new()
+        .route(
+            "/",
+            axum::routing::get(|| async {
+                axum::response::Html("<!doctype html><head><title>AIO</title></head><body></body>")
+            }),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            super::bootstrap_document,
+        ));
+    let router = super::router(state.clone())
+        .merge(aio_plugin_identity_server::router(&catalog)?)
+        .merge(homepage);
     let server = tokio::spawn(async move { axum::serve(listener, router).await });
     let result = exercise(&state, &base).await;
     server.abort();
@@ -79,6 +92,29 @@ async fn exercise(state: &super::RuntimeState, base: &str) -> Result<()> {
     );
     let first_etag = response.headers()[header::ETAG].clone();
     let first: Value = response.json().await?;
+    let document = client
+        .get(base)
+        .header(header::COOKIE, &cookie)
+        .header(header::IF_NONE_MATCH, &first_etag)
+        .send()
+        .await?;
+    assert_eq!(document.status(), StatusCode::OK);
+    assert_eq!(
+        document.headers()[header::CACHE_CONTROL],
+        "private, no-store"
+    );
+    assert!(!document.headers().contains_key(header::ETAG));
+    let document = document.text().await?;
+    use kuchikiki::traits::TendrilSink as _;
+    let document = kuchikiki::parse_html().one(document).document_node;
+    let embedded: Value = serde_json::from_str(
+        &document
+            .select_first("#aio-startup-snapshot")
+            .unwrap()
+            .text_contents(),
+    )?;
+    assert_eq!(embedded["snapshot"], first["data"]);
+    assert_eq!(embedded["etag"], first_etag.to_str()?);
     assert!(
         first["data"]["permissions"]
             .as_array()
@@ -165,6 +201,25 @@ async fn exercise(state: &super::RuntimeState, base: &str) -> Result<()> {
         .await?;
     assert_eq!(revoked.status(), StatusCode::OK);
     assert!(revoked.json::<Value>().await?["data"].is_null());
+    let document = client
+        .get(base)
+        .header(header::COOKIE, &cookie)
+        .header(header::IF_NONE_MATCH, &first_etag)
+        .send()
+        .await?
+        .text()
+        .await?;
+    let document = kuchikiki::parse_html().one(document).document_node;
+    let embedded: Value = serde_json::from_str(
+        &document
+            .select_first("#aio-startup-snapshot")
+            .unwrap()
+            .text_contents(),
+    )?;
+    assert!(
+        embedded["snapshot"].is_null(),
+        "注销后的首页不能复用用户快照"
+    );
     sqlx::query("DELETE FROM tenant_memberships WHERE tenant_id=$1")
         .bind(&tenant)
         .execute(&state.store.pool)

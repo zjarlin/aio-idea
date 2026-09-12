@@ -1,15 +1,20 @@
 use gloo_net::http::Request;
 
-use super::ApplicationSnapshot;
+use super::{ApplicationSnapshot, LoadedApplication};
 use crate::runtime::RuntimeResponse;
 
-#[derive(Clone)]
-pub(crate) struct LoadedApplication {
-    pub snapshot: Option<ApplicationSnapshot>,
-    pub etag: Option<String>,
-}
-
 pub(crate) async fn load(previous: Option<LoadedApplication>) -> Result<LoadedApplication, String> {
+    if previous.is_none()
+        && let Some(element) = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id("aio-startup-snapshot"))
+    {
+        let text = element.text_content().unwrap_or_default();
+        element.remove();
+        if let Ok(snapshot) = serde_json::from_str(&text) {
+            return Ok(snapshot);
+        }
+    }
     for attempt in 0..2 {
         let signal = web_sys::AbortSignal::timeout_with_u32(8_000);
         let mut request = Request::get("/api/runtime/bootstrap").abort_signal(Some(&signal));
