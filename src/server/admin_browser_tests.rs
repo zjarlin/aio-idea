@@ -6,8 +6,10 @@ use tower_http::services::{ServeDir, ServeFile};
 #[ignore = "需要本机独立测试数据库、文件目录、已构建的 Web 壳和 Playwright"]
 async fn system_management_browser_workflows() -> Result<()> {
     let database = std::env::var("AIO_TEST_DATABASE_URL")?;
+    let options: sqlx::postgres::PgConnectOptions = database.parse()?;
     ensure!(
-        database.contains("@127.0.0.1:") && database.ends_with("/aio_keepalive_test"),
+        matches!(options.get_host(), "127.0.0.1" | "localhost" | "/tmp")
+            && options.get_database() == Some("aio_keepalive_test"),
         "仅允许本机隔离测试数据库"
     );
     ensure!(

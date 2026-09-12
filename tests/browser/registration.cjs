@@ -34,21 +34,25 @@ async function scenario(browser, mobile) {
     await dialog.getByRole('button', {name: '注册并登录', exact: true}).click();
     const response = await pending;
     assert.equal(response.status(), expected);
-    return response.json();
   }
   try {
     await page.goto(base);
     await page.getByRole('button', {name: '注册账号', exact: true}).click();
     let dialog = page.getByRole('dialog', {name: '注册账号', exact: true});
     await dialog.waitFor();
+    console.log(`${mode}: registration dialog opened`);
     assert.equal(await dialog.locator('input').count(), 3);
+    await page.waitForFunction(() => [...document.querySelectorAll('.dx-dialog-backdrop')].some(node => getComputedStyle(node).opacity === '1'));
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await viewportScreenshot(page, resolve(output, `${mode}-registration.png`));
+    console.log(`${mode}: registration screenshot captured`);
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     const box = await dialog.boundingBox();
     const viewport = page.viewportSize();
     assert(box.x >= 0 && box.y >= 0 && box.x + box.width <= viewport.width + 1 && box.y + box.height <= viewport.height + 1);
     await dialog.getByRole('button', {name: '取消', exact: true}).click();
     await dialog.waitFor({state: 'detached'});
+    console.log(`${mode}: registration dialog cancelled`);
     assert.equal(registrations, 0);
     await page.getByRole('button', {name: '注册账号', exact: true}).click();
     dialog = page.getByRole('dialog', {name: '注册账号', exact: true});
@@ -59,12 +63,15 @@ async function scenario(browser, mobile) {
     await dialog.getByRole('alert').filter({hasText: '两次输入的密码不一致'}).waitFor();
     assert.equal(registrations, 0);
     await dialog.getByLabel('密码', {exact: true}).fill('short');
+    console.log(`${mode}: password confirmation checked`);
     await dialog.getByLabel('确认密码', {exact: true}).fill('short');
     await submit(dialog, 400);
     await dialog.getByRole('alert').waitFor();
     await dialog.getByLabel('密码', {exact: true}).fill(password);
     await dialog.getByLabel('确认密码', {exact: true}).fill(password);
-    const registered = (await submit(dialog, 201)).data;
+    await submit(dialog, 201);
+    const registered = await session();
+    console.log(`${mode}: account registered`);
     accounts.push({account, user_id: registered.user_id, tenant_id: registered.tenant_id});
     await writeFile(resolve(output, 'accounts.json'), JSON.stringify(accounts, null, 2));
     await page.locator('.application-shell:visible').waitFor();
@@ -85,7 +92,7 @@ async function scenario(browser, mobile) {
     if (mobile) await page.getByRole('button', {name: '打开菜单', exact: true}).click();
     const nav = mobile ? page.getByRole('dialog') : page.locator('.application-shell__sidebar');
     await nav.locator('button[aria-label$="的账户菜单"]').click();
-    await page.getByRole('menuitem', {name: '退出登录', exact: true}).click();
+    await page.getByRole('menuitem', {name: '退出系统', exact: true}).click();
     await page.getByRole('button', {name: '登录', exact: true}).waitFor();
     assert.equal(await session(), null);
     await page.getByRole('button', {name: '注册账号', exact: true}).click();
