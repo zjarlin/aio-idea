@@ -1,5 +1,9 @@
 # 导航浏览器验收
 
+`cleanup-delivery-data.cjs` 在 252 上清理本任务临时仓库的市场与构建记录。必须先通过正式接口卸载并删除 GitHub 测试仓库，脚本只接受 `aio-delivery-e2e-*` 和 `aio-delivery-acceptance-*` 三种语言的精确名称；存在租户绑定或进行中的构建时拒绝清理。
+
+`create-delivery-repositories.cjs` 将 `/tmp/aio-delivery-acceptance-{rust,kotlin,typescript}` 中已由 CLI 生成并提交的干净项目创建为公开仓库，记录首次 push 时间及远端 SHA。`cli-delivery-live.cjs` 通过 `AIO_DELIVERY_SCENARIO=e2e|acceptance` 选择仓库组，`AIO_DELIVERY_LANGUAGE` 可只检查一种语言。`AIO_DELIVERY_OTHER_PLUGIN` 指定 Counter 更新期间应保留实例的另一插件。只读元数据查询在网络失败时最多重试三次。
+
 `delivery-live.cjs` 在公网同时保持桌面与移动页面打开，先验证 61 秒无变化轮询，再等待真实源码 push 导致的 Counter 或 README 更新。`AIO_DELIVERY_E2E_MODE=counter|readme` 选择场景；脚本输出 ready 文件后再提交对应源码变更，不调用发布或激活接口。`cli-delivery-live.cjs` 验证三种 CLI 临时插件的真实前后端通信；运行前等待服务器完成首次构建和安装。报告与截图保存到 `target/delivery-test`。
 
 `marketplace.cjs` 使用编译后的市场页面与隔离 HTTP 数据验证桌面/移动端分栏、搜索、键盘选择、README 表格/代码/版本图片、危险链接过滤、直接安装、启停、卸载确认和文档自动更新。报告与截图保存到 `target/marketplace-test`。`AIO_MARKETPLACE_PREVIEW_PORT` 可启动本机预览。公网提交触发自动发布的验收单独记录，不能用协议夹具代替。

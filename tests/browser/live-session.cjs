@@ -22,4 +22,17 @@ async function marketplace(page,mobile) {
   await page.getByRole('menuitem',{name:'插件市场',exact:true}).click();
   await page.getByRole('treeitem').first().waitFor();
 }
-module.exports={contextFor,select,marketplace};
+async function getJson(context,url) {
+  for(let attempt=0;attempt<3;attempt++) {
+    try {
+      const response=await context.request.get(url,{timeout:20000});
+      if(response.ok())return await response.json();
+      if(response.status()<500)throw new Error(`GET ${new URL(url).pathname}: HTTP ${response.status()}`);
+    } catch(error) {
+      if(attempt===2||/HTTP 4\d\d/.test(error.message))throw new Error(`Read failed: ${new URL(url).pathname}`);
+    }
+    await new Promise(resolve=>setTimeout(resolve,2000*(attempt+1)));
+  }
+  throw new Error(`Read failed: ${new URL(url).pathname}`);
+}
+module.exports={contextFor,select,marketplace,getJson};

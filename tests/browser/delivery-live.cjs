@@ -3,30 +3,37 @@ const {mkdir,writeFile}=require('node:fs/promises');
 const {resolve}=require('node:path');
 const {chromium}=require('playwright');
 const {PNG}=require('pngjs');
-const {contextFor,select,marketplace}=require('./live-session.cjs');
+const {contextFor,select,marketplace,getJson}=require('./live-session.cjs');
 const base=process.env.AIO_URL||'https://aio.addzero.site';
 const output=resolve('target/delivery-test');
 const mode=process.env.AIO_DELIVERY_E2E_MODE||'counter';
 const git='https://github.com/zjarlin/aio-plugin-kmp-example.git';
+const otherPlugin=process.env.AIO_DELIVERY_OTHER_PLUGIN||'Dioxus 全栈计数器';
 
 async function metadata(context){
-  const list=await context.request.get(`${base}/api/runtime/marketplace`);assert(list.ok());
-  const entry=(await list.json()).data.find(e=>e.git===git);assert(entry);
-  const details=await context.request.get(`${base}/api/runtime/marketplace/${entry.rev}/details`);assert(details.ok());
-  return {entry,details:(await details.json()).data};
+  const list=await getJson(context,`${base}/api/runtime/marketplace`);
+  const entry=list.data.find(e=>e.git===git);assert(entry);
+  const details=await getJson(context,`${base}/api/runtime/marketplace/${entry.rev}/details`);
+  return {entry,details:details.data};
 }
 async function counter(page,frame) {
   const button=frame.getByRole('button',{name:'+1',exact:true});
-  await button.waitFor();await page.waitForTimeout(500);
+  await button.waitFor();await page.mouse.move(0,0);await page.waitForTimeout(500);
   const before=PNG.sync.read(await frame.locator('canvas').first().screenshot());
   const bounds=await button.boundingBox();assert(bounds);
   await page.mouse.click(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
-  await frame.getByText('1',{exact:true}).waitFor({timeout:10000});
+  try{await frame.getByText('1',{exact:true}).waitFor({timeout:10000});}
+  catch(error){
+    await page.screenshot({path:resolve(output,`${page.viewportSize().width}-counter-click-failure.png`)});
+    console.error(JSON.stringify({bounds,canvas:await frame.locator('canvas').first().boundingBox(),text:await frame.locator('body').innerText()}));
+    throw error;
+  }
   const after=PNG.sync.read(await frame.locator('canvas').first().screenshot());
   let changed=0;for(let i=0;i<Math.min(before.data.length,after.data.length);i+=4)if(before.data.readUInt32BE(i)!==after.data.readUInt32BE(i))changed++;
   assert(changed>30);return changed;
 }
 async function prepare(browser,mobile) {
+  console.log(`Opening ${mobile?'mobile':'desktop'} ${mode} page`);
   const context=await contextFor(browser,base,mobile);const page=await context.newPage();
   const events={mainNavigations:0,mounts:[],errors:[]};
   page.on('framenavigated',frame=>{if(frame===page.mainFrame())events.mainNavigations++;});
@@ -34,6 +41,7 @@ async function prepare(browser,mobile) {
   page.on('pageerror',error=>events.errors.push(error.message));
   await page.goto(base);await page.locator('.application-shell:visible').waitFor();
   const initial=await metadata(context);
+  console.log(`${mobile?'mobile':'desktop'} baseline ${initial.entry.rev}`);
   const shellMarker=await page.evaluate(()=>window.__deliveryShellMarker=Math.random());
   if(mode==='readme') {
     await marketplace(page,mobile);
@@ -46,9 +54,9 @@ async function prepare(browser,mobile) {
     return {context,page,mobile,events,initial,shellMarker,readingScroll};
   }
   await page.getByRole('navigation',{name:'场景'}).getByRole('button',{name:'社区插件',exact:true}).click();
-  await select(page,mobile,'Dioxus 全栈计数器');
-  const other=page.frameLocator('iframe[title="Dioxus 全栈计数器"]');
-  await other.getByRole('button',{name:'+1',exact:true}).waitFor({timeout:90000});
+  await select(page,mobile,otherPlugin);
+  const other=page.frameLocator(`iframe[title="${otherPlugin}"]`);
+  await other.getByRole('button').first().waitFor({timeout:180000});
   const otherMarker=await other.locator('body').evaluate(()=>window.__deliveryOtherMarker=Math.random());
   await select(page,mobile,'KMP 全栈示例');
   const frame=page.frameLocator('iframe[title="KMP 全栈示例"]');
@@ -75,7 +83,7 @@ async function verify(item){
     assert.equal(await frame.locator('body').evaluate(()=>location.hash),'#counter');
     assert.notEqual(await page.locator('iframe[title="KMP 全栈示例"]').getAttribute('src'),item.source);
     painted=await counter(page,frame);
-    assert.equal(await page.frameLocator('iframe[title="Dioxus 全栈计数器"]').locator('body').evaluate(()=>window.__deliveryOtherMarker),item.otherMarker);
+    assert.equal(await page.frameLocator(`iframe[title="${otherPlugin}"]`).locator('body').evaluate(()=>window.__deliveryOtherMarker),item.otherMarker);
   }
   const observedAt=Date.now();const latest=await metadata(context);
   assert.notEqual(latest.entry.rev,initial.entry.rev);
