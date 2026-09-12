@@ -15,8 +15,32 @@ impl PluginStore {
         instance: Option<&ProcessInstance>,
         publication: Option<&MarketplaceEntry>,
     ) -> Result<()> {
+        self.save_activation(tenant_id, plugin, instance, publication, true)
+            .await
+    }
+
+    pub(super) async fn publish_only(
+        &self,
+        tenant_id: &str,
+        plugin: DiscoveredPlugin,
+        publication: &MarketplaceEntry,
+    ) -> Result<()> {
+        self.save_activation(tenant_id, plugin, None, Some(publication), false)
+            .await
+    }
+
+    async fn save_activation(
+        &self,
+        tenant_id: &str,
+        plugin: DiscoveredPlugin,
+        instance: Option<&ProcessInstance>,
+        publication: Option<&MarketplaceEntry>,
+        bind: bool,
+    ) -> Result<()> {
         let mut transaction = self.pool.begin().await?;
         if publication.is_some() {
+            super::delivery::ensure_current(&mut transaction, &plugin.git, &plugin.revision)
+                .await?;
             super::publisher_store::ensure_current_publication(
                 &mut transaction,
                 tenant_id,
@@ -49,7 +73,8 @@ impl PluginStore {
         .bind(serde_json::to_value(&plugin.pages)?)
         .fetch_one(&mut *transaction)
         .await?;
-        sqlx::query(
+        if bind {
+            sqlx::query(
             "INSERT INTO tenant_plugin_bindings (tenant_id, source_id, revision_id, enabled) VALUES ($1, $2, $3, TRUE) ON CONFLICT (tenant_id, source_id) DO UPDATE SET revision_id = EXCLUDED.revision_id, enabled = TRUE, updated_at = now()",
         )
         .bind(tenant_id)
@@ -57,17 +82,19 @@ impl PluginStore {
         .bind(&revision_id)
         .execute(&mut *transaction)
         .await?;
-        stop_instances(&mut transaction, tenant_id, &source_id).await?;
-        start_instance(&mut transaction, tenant_id, &revision_id, instance).await?;
-        record_event(
-            &mut transaction,
-            tenant_id,
-            &source_id,
-            Some(&revision_id),
-            "activate",
-            "健康检查通过并原子激活",
-        )
-        .await?;
+            super::delivery::remember_installation(&mut transaction, tenant_id, &source_id).await?;
+            stop_instances(&mut transaction, tenant_id, &source_id).await?;
+            start_instance(&mut transaction, tenant_id, &revision_id, instance).await?;
+            record_event(
+                &mut transaction,
+                tenant_id,
+                &source_id,
+                Some(&revision_id),
+                "activate",
+                "健康检查通过并原子激活",
+            )
+            .await?;
+        }
         if let Some(publication) = publication {
             super::marketplace_store::upsert_published_marketplace_entry(
                 &mut transaction,

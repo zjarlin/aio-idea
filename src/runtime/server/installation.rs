@@ -59,15 +59,61 @@ async fn resolve_install_candidate(
 pub(super) async fn activate(
     state: &RuntimeState,
     tenant_id: &str,
+    discovered: DiscoveredPlugin,
+    validation_detail: &str,
+    publication: Option<&MarketplaceEntry>,
+) -> Result<ActivatedPlugin> {
+    activate_inner(
+        state,
+        tenant_id,
+        discovered,
+        validation_detail,
+        publication,
+        false,
+    )
+    .await
+}
+
+pub(super) async fn install_followed(
+    state: &RuntimeState,
+    tenant_id: &str,
+    request: &InstallPluginRequest,
+) -> Result<ActivatedPlugin> {
+    let publication = state
+        .store
+        .published_marketplace_entry(&request.git, request.rev.as_deref())
+        .await?
+        .context("自动更新版本尚未发布")?;
+    state.restore_package_cache(&publication.rev).await?;
+    let (discovered, detail) =
+        resolve_install_candidate(&state.repository, request, Some(&publication)).await?;
+    activate_inner(state, tenant_id, discovered, detail, None, true).await
+}
+
+async fn activate_inner(
+    state: &RuntimeState,
+    tenant_id: &str,
     mut discovered: DiscoveredPlugin,
     validation_detail: &str,
     publication: Option<&MarketplaceEntry>,
+    following: bool,
 ) -> Result<ActivatedPlugin> {
     if let Some(source_id) = state.store.source_id(&discovered.git).await? {
         discovered.source_id = source_id;
     }
     let activation_lock = state.activation_lock(tenant_id, &discovered.source_id)?;
     let _activation_guard = activation_lock.lock().await;
+    if following {
+        let eligible: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tenant_plugin_bindings b JOIN plugin_sources s ON s.id=b.source_id JOIN marketplace_entries m ON m.git=s.git AND m.source='aio://published' LEFT JOIN delivery_installations i ON i.tenant_id=b.tenant_id AND i.source_id=b.source_id WHERE b.tenant_id=$1 AND b.source_id=$2 AND b.enabled AND m.rev=$3 AND i.excluded_revision IS DISTINCT FROM $3)")
+            .bind(tenant_id).bind(&discovered.source_id).bind(&discovered.revision).fetch_one(&state.store.pool).await?;
+        anyhow::ensure!(eligible, "安装状态或目标版本已改变，取消自动升级");
+    }
+    let publish_only = if publication.is_some() {
+        sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM delivery_jobs WHERE package_revision=$3) AND EXISTS(SELECT 1 FROM delivery_installations WHERE tenant_id=$1 AND source_id=$2) AND NOT EXISTS(SELECT 1 FROM tenant_plugin_bindings WHERE tenant_id=$1 AND source_id=$2 AND enabled)")
+            .bind(tenant_id).bind(&discovered.source_id).bind(&discovered.revision).fetch_one(&state.store.pool).await?
+    } else {
+        false
+    };
     let current_revision = discovered.revision.clone();
     state
         .store
@@ -134,7 +180,11 @@ pub(super) async fn activate(
         revision: discovered.revision.clone(),
         page_count: discovered.pages.len(),
     };
-    if let Err(error) = stop_previous_process(state, previous, instance.as_ref()).await {
+    if publish_only {
+        let result = state
+            .store
+            .publish_only(tenant_id, discovered, publication.expect("发布元数据"))
+            .await;
         let _ = cleanup_new_process(state, instance.as_ref()).await;
         let _ = cleanup_new_wasm(
             state,
@@ -143,7 +193,8 @@ pub(super) async fn activate(
             &current_revision,
             wasm.as_ref(),
         );
-        return Err(error);
+        result?;
+        return Ok(activated);
     }
     if let Err(error) = state
         .store
@@ -171,6 +222,9 @@ pub(super) async fn activate(
             ));
         }
         return Err(error);
+    }
+    if let Err(error) = stop_previous_process(state, previous, instance.as_ref()).await {
+        eprintln!("新版本已切换，旧进程清理待重试: {error:#}");
     }
     deactivate_previous_wasm(
         state,

@@ -1,6 +1,7 @@
 mod activation_store;
 #[cfg(test)]
 mod admin_test_support;
+mod delivery;
 mod frontend_access;
 #[cfg(test)]
 mod frontend_browser_tests;
@@ -108,6 +109,7 @@ impl RuntimeState {
         state.reconcile_wasm().await?;
         state.reconcile_processes().await?;
         state.resume_published_jobs().await?;
+        delivery::start(state.clone());
         Ok(state)
     }
 

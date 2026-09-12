@@ -15,6 +15,8 @@ let restoring = null;
 const page = frame.closest("[data-aio-page-active]");
 const workspaceActive = () => !page || page.dataset.aioWorkspaceActive !== 'false';
 const visible = () => !document.hidden && (!page || page.dataset.aioPageActive === "true");
+const routeKey = `aio-plugin-route:${config.session_context}:${config.context}:${config.page_id}`;
+const routes = window.__aioPluginRoutes || (window.__aioPluginRoutes = new Map());
 const reply = (message, transfer = []) => {
   if (!disposed) frame.contentWindow?.postMessage({ channel: "aio-plugin", token: config.token, ...message }, "*", transfer);
 };
@@ -25,6 +27,10 @@ const receive = async (event) => {
       typeof message.id !== "string" || !/^[0-9]{1,16}$/.test(message.id)) return;
   if (requests.has(message.id)) return;
   if (!workspaceActive()) return reply({ id: message.id, error: '租户页面已暂停' });
+  if (typeof message.navigation === 'string' && (message.navigation === '' || message.navigation.startsWith('#')) && message.navigation.length <= 2048) {
+    routes.set(routeKey, message.navigation);
+    return reply({ id: message.id, response: message.navigation });
+  }
   if (requests.size >= 16) return reply({ id: message.id, error: "插件请求超过并发配额" });
   let body;
   try {
@@ -166,6 +172,8 @@ if ((page && page.dataset.aioWorkspaceContext !== config.context) || !workspaceA
   cleanup();
   dioxus.send({ error: '挂载期间租户或权限已变化，请重新打开页面' });
 } else {
+  const fragment = routes.get(routeKey);
+  if (fragment) assetURL.hash = fragment;
   frame.src = assetURL.href;
 }
 try {

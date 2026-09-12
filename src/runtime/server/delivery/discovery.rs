@@ -1,0 +1,229 @@
+use std::time::Duration;
+
+use anyhow::{Context as _, Result, ensure};
+use reqwest::{Client, StatusCode};
+use serde::Deserialize;
+use sqlx::Row;
+
+use super::super::RuntimeState;
+
+#[derive(Deserialize)]
+struct Repository {
+    clone_url: String,
+    full_name: String,
+    default_branch: String,
+    archived: bool,
+    fork: bool,
+}
+
+fn request(client: &Client, path: &str) -> reqwest::RequestBuilder {
+    let request = client
+        .get(format!("https://api.github.com/{path}"))
+        .header("user-agent", "aio-delivery")
+        .header("accept", "application/vnd.github+json");
+    match std::env::var("AIO_DELIVERY_GITHUB_TOKEN") {
+        Ok(token) => request.bearer_auth(token),
+        Err(_) => request,
+    }
+}
+
+async fn inspect(
+    state: &RuntimeState,
+    client: &Client,
+    repo: &str,
+    git: &str,
+    branch: &str,
+) -> Result<()> {
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::process::Command::new("git")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args([
+                "ls-remote",
+                "--refs",
+                "--",
+                git,
+                &format!("refs/heads/{branch}"),
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await??;
+    ensure!(output.status.success(), "读取远程分支失败");
+    let sha = String::from_utf8(output.stdout)?
+        .split_whitespace()
+        .next()
+        .context("默认分支为空")?
+        .to_owned();
+    ensure!(
+        sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+        "无效提交 SHA"
+    );
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM delivery_sources WHERE git=$1 AND desired_sha=$2 AND enabled)",
+    )
+    .bind(git)
+    .bind(&sha)
+    .fetch_one(&state.store.pool)
+    .await?;
+    if exists {
+        return Ok(());
+    }
+    let response = client
+        .get(format!(
+            "https://raw.githubusercontent.com/{repo}/{sha}/aio-delivery.toml"
+        ))
+        .send()
+        .await?;
+    if response.status() == StatusCode::NOT_FOUND {
+        sqlx::query("UPDATE delivery_sources SET enabled=FALSE,updated_at=now() WHERE git=$1")
+            .bind(git)
+            .execute(&state.store.pool)
+            .await?;
+        return Ok(());
+    }
+    let manifest = az_plugin_delivery::parse(&response.error_for_status()?.text().await?)?;
+    let mut tx = state.store.pool.begin().await?;
+    sqlx::query("INSERT INTO delivery_sources(git,branch,desired_sha) VALUES($1,$2,$3) ON CONFLICT(git) DO UPDATE SET branch=EXCLUDED.branch,desired_sha=EXCLUDED.desired_sha,enabled=TRUE,updated_at=now()")
+        .bind(git).bind(branch).bind(&sha).execute(&mut *tx).await?;
+    sqlx::query("UPDATE delivery_jobs SET state='superseded',updated_at=now() WHERE git=$1 AND source_revision<>$2 AND state='queued'").bind(git).bind(&sha).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO delivery_jobs(git,source_revision,recipe) VALUES($1,$2,$3) ON CONFLICT(git,source_revision) DO NOTHING")
+        .bind(git).bind(&sha).bind(serde_json::to_value(manifest.build)?).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn scan(
+    state: &RuntimeState,
+    client: &Client,
+    owner: &str,
+    etags: &mut std::collections::HashMap<usize, String>,
+) -> Result<()> {
+    for page in 1..=100 {
+        let mut request = request(
+            client,
+            &format!("users/{owner}/repos?per_page=100&page={page}&sort=updated"),
+        );
+        if let Some(etag) = etags.get(&page) {
+            request = request.header("if-none-match", etag);
+        }
+        let response = request.send().await?;
+        if response.status() == StatusCode::NOT_MODIFIED {
+            if !etags.contains_key(&(page + 1)) {
+                break;
+            }
+            continue;
+        }
+        let response = response.error_for_status()?;
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|h| h.to_str().ok())
+            .map(str::to_owned);
+        let repositories: Vec<Repository> = response.json().await?;
+        let last = repositories.len() < 100;
+        for repository in repositories {
+            if repository.archived || repository.fork {
+                sqlx::query("UPDATE delivery_sources SET enabled=FALSE WHERE git=$1")
+                    .bind(&repository.clone_url)
+                    .execute(&state.store.pool)
+                    .await?;
+                continue;
+            }
+            // 先探测标记，普通业务仓库不会触发源码拉取。
+            let result = async {
+                if request_marker(client, &repository.full_name, &repository.default_branch).await?
+                {
+                    inspect(
+                        state,
+                        client,
+                        &repository.full_name,
+                        &repository.clone_url,
+                        &repository.default_branch,
+                    )
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            if let Err(error) = result {
+                eprintln!("检查 {} 发布标记失败: {error:#}", repository.full_name);
+            }
+        }
+        if let Some(etag) = etag {
+            etags.insert(page, etag);
+        }
+        if last {
+            etags.retain(|p, _| *p <= page);
+            break;
+        }
+    }
+    Ok(())
+}
+
+async fn request_marker(client: &Client, repository: &str, branch: &str) -> Result<bool> {
+    let response = client
+        .get(format!(
+            "https://raw.githubusercontent.com/{repository}/{branch}/aio-delivery.toml"
+        ))
+        .send()
+        .await?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(false);
+    }
+    az_plugin_delivery::parse(&response.error_for_status()?.text().await?).map(|_| true)
+}
+
+pub(super) async fn run(state: RuntimeState) {
+    let owner = std::env::var("AIO_DELIVERY_OWNER").unwrap_or_else(|_| "zjarlin".into());
+    if !owner
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        eprintln!("自动发现 owner 无效");
+        return;
+    }
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("构建发现客户端");
+    tokio::join!(discover(&state, &client, &owner), poll(&state, &client));
+}
+
+async fn discover(state: &RuntimeState, client: &Client, owner: &str) {
+    let mut etags = std::collections::HashMap::new();
+    loop {
+        if let Err(error) = scan(state, client, owner, &mut etags).await {
+            eprintln!("扫描插件仓库失败: {error:#}");
+        }
+        tokio::time::sleep(Duration::from_secs(300)).await;
+    }
+}
+
+async fn poll(state: &RuntimeState, client: &Client) {
+    loop {
+        let result = async {
+            let rows = sqlx::query("SELECT git,branch FROM delivery_sources WHERE enabled")
+                .fetch_all(&state.store.pool)
+                .await?;
+            for row in rows {
+                let git: String = row.try_get("git")?;
+                let branch: String = row.try_get("branch")?;
+                let repo = git
+                    .strip_prefix("https://github.com/")
+                    .and_then(|s| s.strip_suffix(".git"))
+                    .context("交付来源必须属于 GitHub")?;
+                if let Err(error) = inspect(&state, &client, repo, &git, &branch).await {
+                    eprintln!("检查 {repo} 失败: {error:#}");
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = result {
+            eprintln!("仓库发现: {error:#}");
+        }
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }
+}

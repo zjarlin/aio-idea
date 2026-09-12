@@ -1,5 +1,7 @@
 # 导航浏览器验收
 
+`marketplace.cjs` 使用编译后的市场页面与隔离 HTTP 数据验证桌面/移动端分栏、搜索、键盘选择、README 表格/代码/版本图片、危险链接过滤、直接安装、启停、卸载确认和文档自动更新。报告与截图保存到 `target/marketplace-test`。`AIO_MARKETPLACE_PREVIEW_PORT` 可启动本机预览。公网提交触发自动发布的验收单独记录，不能用协议夹具代替。
+
 `navigation.cjs` 验证场景根筛选、系统树目录及折叠状态、账户全屏页面、返回后页面状态，以及移动端账户菜单关闭抽屉和页面无溢出。使用 Playwright；将其安装到可由 Node 解析的目录后运行：
 
 ```bash

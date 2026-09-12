@@ -13,6 +13,7 @@
     parent.postMessage({ channel: "aio-plugin", token, id, ...payload }, "*");
   });
   const request = ({ method = 'GET', path, query = null, body = '' }) => call({ request: { method, path, query, body } });
+  addEventListener('hashchange', () => { void call({ navigation: location.hash }).catch(() => {}); });
   addEventListener("message", (event) => {
     if (event.source !== parent || event.data?.channel !== "aio-plugin" || event.data.token !== token) return;
     if (event.data.lifecycle === "visibility" && typeof event.data.visible === "boolean") {

@@ -93,6 +93,7 @@ pub fn router(state: RuntimeState) -> Router {
             "/api/runtime/plugins/{source_id}/uninstall",
             post(uninstall),
         )
+        .merge(super::delivery::router())
         .with_state(state)
 }
 
@@ -279,6 +280,29 @@ async fn enable(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
+    state
+        .store
+        .bound_runtime(&session.tenant_id, &source_id)
+        .await?;
+    let git: Option<String> = sqlx::query_scalar("SELECT git FROM plugin_sources WHERE id=$1")
+        .bind(&source_id)
+        .fetch_optional(&state.store.pool)
+        .await
+        .map_err(anyhow::Error::from)?;
+    if let Some(git) = git
+        && let Some(latest) = state.store.published_marketplace_entry(&git, None).await?
+    {
+        super::installation::install(
+            &state,
+            &session.tenant_id,
+            &InstallPluginRequest {
+                git,
+                rev: Some(latest.rev),
+            },
+        )
+        .await?;
+        return catalog_for(&state, &session).await;
+    }
     let lifecycle_lock = state.activation_lock(&session.tenant_id, &source_id)?;
     let _lifecycle_guard = lifecycle_lock.lock().await;
     let target = state

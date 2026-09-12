@@ -52,6 +52,12 @@ fn App() -> dioxus::prelude::Element {
         }
         Err::<_, String>("租户正在切换，请重试".to_owned())
     });
+    let mut last_application = use_signal(|| None);
+    use_effect(move || {
+        if let Some(Ok(value)) = application.read().as_ref() {
+            last_application.set(Some(value.clone()));
+        }
+    });
     use_effect(move || {
         if matches!(application.read().as_ref(), Some(Ok((None, _)))) {
             spawn(async {
@@ -70,7 +76,19 @@ fn App() -> dioxus::prelude::Element {
             application.restart();
         }
     });
-    let Some(application_result) = application.read().as_ref().cloned() else {
+    let result = application.read().as_ref().cloned();
+    let result = match result {
+        Some(Err(error)) => Some(
+            last_application
+                .read()
+                .clone()
+                .map(Ok)
+                .unwrap_or(Err(error)),
+        ),
+        None => last_application.read().clone().map(Ok),
+        result => result,
+    };
+    let Some(application_result) = result else {
         return standalone_page(rsx! { p { "正在验证会话" } });
     };
     let (session, catalog) = match application_result {

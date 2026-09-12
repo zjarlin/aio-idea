@@ -126,6 +126,7 @@ impl PluginStore {
         super::marketplace_store::migrate(&self.pool).await?;
         super::publisher_store::migrate(&self.pool).await?;
         super::package_store::migrate(&self.pool).await?;
+        super::delivery::migrate(&self.pool).await?;
         page_state::migrate(&self.pool).await?;
         self.migrate_published_source_ids().await?;
         Ok(())
@@ -315,7 +316,7 @@ impl PluginStore {
 
     pub async fn rollback_target(&self, tenant_id: &str, source_id: &str) -> Result<BoundRuntime> {
         let row = sqlx::query(
-            "SELECT revisions.id, revisions.revision, revisions.runtime, revisions.manifest->'runtime'->>'artifact' AS artifact FROM plugin_revisions revisions JOIN tenant_plugin_bindings bindings ON bindings.source_id = revisions.source_id WHERE bindings.tenant_id = $1 AND bindings.source_id = $2 AND revisions.id <> bindings.revision_id ORDER BY revisions.created_at DESC LIMIT 1",
+            "SELECT revisions.id, revisions.revision, revisions.runtime, revisions.manifest->'runtime'->>'artifact' AS artifact FROM plugin_revisions revisions JOIN tenant_plugin_bindings bindings ON bindings.source_id = revisions.source_id WHERE bindings.tenant_id = $1 AND bindings.source_id = $2 AND revisions.id <> bindings.revision_id AND (length(revisions.revision)<>64 OR EXISTS(SELECT 1 FROM plugin_packages p WHERE p.revision=revisions.revision)) ORDER BY revisions.created_at DESC LIMIT 1",
         )
         .bind(tenant_id)
         .bind(source_id)
@@ -338,6 +339,7 @@ impl PluginStore {
         instance: Option<&ProcessInstance>,
     ) -> Result<()> {
         let mut transaction = self.pool.begin().await?;
+        super::delivery::exclude_revision(&mut transaction, tenant_id, source_id).await?;
         stop_instances(&mut transaction, tenant_id, source_id).await?;
         let result = sqlx::query("UPDATE tenant_plugin_bindings SET revision_id = $3, enabled = TRUE, updated_at = now() WHERE tenant_id = $1 AND source_id = $2 AND EXISTS (SELECT 1 FROM plugin_revisions WHERE id = $3 AND source_id = $2)")
             .bind(tenant_id).bind(source_id).bind(&target.revision_id).execute(&mut *transaction).await?;

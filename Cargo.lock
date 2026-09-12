@@ -47,6 +47,7 @@ dependencies = [
  "anyhow",
  "axum",
  "az-dioxus-admin-shell",
+ "az-plugin-delivery",
  "az-plugin-manifest",
  "az-plugin-package",
  "az-ui-components",
@@ -208,7 +209,7 @@ dependencies = [
 [[package]]
 name = "aio-plugin-marketplace-client"
 version = "0.1.0"
-source = "git+https://github.com/zjarlin/aio-plugin-marketplace.git?rev=e8cdbeed85dbe0d43a9e69efddaa4eb403f439f5#e8cdbeed85dbe0d43a9e69efddaa4eb403f439f5"
+source = "git+https://github.com/zjarlin/aio-plugin-marketplace.git?rev=2fb5dfb0a1a71962372426b969470b38216f2e19#2fb5dfb0a1a71962372426b969470b38216f2e19"
 dependencies = [
  "az-dioxus-admin-shell",
  "az-ui-components",
@@ -223,7 +224,7 @@ dependencies = [
 [[package]]
 name = "aio-plugin-marketplace-server"
 version = "0.1.0"
-source = "git+https://github.com/zjarlin/aio-plugin-marketplace.git?rev=e8cdbeed85dbe0d43a9e69efddaa4eb403f439f5#e8cdbeed85dbe0d43a9e69efddaa4eb403f439f5"
+source = "git+https://github.com/zjarlin/aio-plugin-marketplace.git?rev=2fb5dfb0a1a71962372426b969470b38216f2e19#2fb5dfb0a1a71962372426b969470b38216f2e19"
 dependencies = [
  "anyhow",
  "axum",
@@ -627,9 +628,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "az-plugin-delivery"
+version = "2026.5.10"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=2e03cb9c34bbe357d3a1e9e3cb5789beef310748#2e03cb9c34bbe357d3a1e9e3cb5789beef310748"
+dependencies = [
+ "anyhow",
+ "serde",
+ "toml 0.8.2",
+]
+
+[[package]]
 name = "az-plugin-manifest"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=945f36465ff604defcdc051ac005a9c1a4261714#945f36465ff604defcdc051ac005a9c1a4261714"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=2e03cb9c34bbe357d3a1e9e3cb5789beef310748#2e03cb9c34bbe357d3a1e9e3cb5789beef310748"
 dependencies = [
  "anyhow",
  "semver",
@@ -644,7 +655,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-package"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=945f36465ff604defcdc051ac005a9c1a4261714#945f36465ff604defcdc051ac005a9c1a4261714"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=2e03cb9c34bbe357d3a1e9e3cb5789beef310748#2e03cb9c34bbe357d3a1e9e3cb5789beef310748"
 dependencies = [
  "anyhow",
  "az-plugin-manifest",
@@ -664,6 +675,8 @@ dependencies = [
  "dioxus",
  "dioxus-icons",
  "manganis",
+ "pulldown-cmark",
+ "url",
 ]
 
 [[package]]
@@ -5037,6 +5050,24 @@ dependencies = [
  "idna",
  "psl-types",
 ]
+
+[[package]]
+name = "pulldown-cmark"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
+dependencies = [
+ "bitflags 2.13.1",
+ "memchr",
+ "pulldown-cmark-escape",
+ "unicase",
+]
+
+[[package]]
+name = "pulldown-cmark-escape"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "pulley-interpreter"
