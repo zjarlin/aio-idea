@@ -33,7 +33,9 @@ cleanup() {
 trap cleanup EXIT
 
 git -C "$repository" worktree add --detach "$workspace/source" "$revision"
-git -C "$workspace/source" submodule update --init --recursive
+git -C "$workspace/source" -c protocol.file.allow=always \
+    -c "submodule.lib/dioxus-admin-workbench.url=$repository/lib/dioxus-admin-workbench" \
+    submodule update --init --recursive
 
 cd "$workspace/source"
 export CARGO_TARGET_DIR="${AIO_DEPLOY_TARGET_DIR:-$workspace/source/target}"
