@@ -69,10 +69,9 @@ async fn inspect(
     if exists {
         return Ok(());
     }
-    let response = client
-        .get(format!(
-            "https://raw.githubusercontent.com/{repo}/{sha}/aio-delivery.toml"
-        ))
+    let response = request(client, &format!("repos/{repo}/contents/aio-delivery.toml"))
+        .header("accept", "application/vnd.github.raw+json")
+        .query(&[("ref", sha.as_str())])
         .send()
         .await?;
     if response.status() == StatusCode::NOT_FOUND {
@@ -122,6 +121,8 @@ async fn scan(
             .map(str::to_owned);
         let repositories: Vec<Repository> = response.json().await?;
         let last = repositories.len() < 100;
+        let mut tasks = tokio::task::JoinSet::new();
+        let mut failed = false;
         for repository in repositories {
             if repository.archived || repository.fork {
                 sqlx::query("UPDATE delivery_sources SET enabled=FALSE WHERE git=$1")
@@ -130,27 +131,40 @@ async fn scan(
                     .await?;
                 continue;
             }
-            // 先探测标记，普通业务仓库不会触发源码拉取。
-            let result = async {
-                if request_marker(client, &repository.full_name, &repository.default_branch).await?
-                {
-                    inspect(
-                        state,
-                        client,
-                        &repository.full_name,
-                        &repository.clone_url,
-                        &repository.default_branch,
-                    )
-                    .await?;
+            let state = state.clone();
+            let client = client.clone();
+            tasks.spawn(async move {
+                let result = async {
+                    if request_marker(&client, &repository.full_name, &repository.default_branch)
+                        .await?
+                    {
+                        inspect(
+                            &state,
+                            &client,
+                            &repository.full_name,
+                            &repository.clone_url,
+                            &repository.default_branch,
+                        )
+                        .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
                 }
-                Ok::<_, anyhow::Error>(())
-            }
-            .await;
-            if let Err(error) = result {
-                eprintln!("检查 {} 发布标记失败: {error:#}", repository.full_name);
+                .await;
+                if let Err(error) = &result {
+                    eprintln!("检查 {} 发布标记失败: {error:#}", repository.full_name);
+                }
+                result.is_ok()
+            });
+            if tasks.len() >= 8 {
+                failed |= !matches!(tasks.join_next().await, Some(Ok(true)));
             }
         }
-        if let Some(etag) = etag {
+        while let Some(result) = tasks.join_next().await {
+            failed |= !matches!(result, Ok(true));
+        }
+        if failed {
+            etags.remove(&page);
+        } else if let Some(etag) = etag {
             etags.insert(page, etag);
         }
         if last {
@@ -162,12 +176,14 @@ async fn scan(
 }
 
 async fn request_marker(client: &Client, repository: &str, branch: &str) -> Result<bool> {
-    let response = client
-        .get(format!(
-            "https://raw.githubusercontent.com/{repository}/{branch}/aio-delivery.toml"
-        ))
-        .send()
-        .await?;
+    let response = request(
+        client,
+        &format!("repos/{repository}/contents/aio-delivery.toml"),
+    )
+    .header("accept", "application/vnd.github.raw+json")
+    .query(&[("ref", branch)])
+    .send()
+    .await?;
     if response.status() == StatusCode::NOT_FOUND {
         return Ok(false);
     }
