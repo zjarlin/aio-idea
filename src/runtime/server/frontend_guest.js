@@ -8,7 +8,7 @@
   const call = payload => new Promise((resolve, reject) => {
     if (pending.size >= 16) return reject(new Error("请求数量超过限制"));
     const id = String(++sequence);
-    const timeout = setTimeout(() => { pending.delete(id); reject(new Error("插件请求超时")); }, 30000);
+    const timeout = setTimeout(() => { pending.delete(id); reject(new Error("插件请求超时")); }, typeof payload.asset === 'string' ? 180000 : 30000);
     pending.set(id, { resolve, reject, timeout });
     parent.postMessage({ channel: "aio-plugin", token, id, ...payload }, "*");
   });

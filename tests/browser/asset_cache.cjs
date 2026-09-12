@@ -102,3 +102,17 @@ test('writes from different plugin mounts obey the shared entry quota', async ()
   assert(!keys.includes('old-0'));
   assert(!keys.includes('old-1'));
 });
+
+test('large asset transfers have a separate timeout from business requests', () => {
+  const timeouts = [];
+  const window = { fetch: () => {} };
+  const document = { currentScript: { dataset: { token: 'channel' }, src: 'https://aio.test/api/runtime/frontend/assets/channel/__aio_bridge.js' }, baseURI: 'https://aio.test/api/runtime/frontend/assets/channel/' };
+  runInNewContext(readFileSync('src/runtime/server/frontend_guest.js', 'utf8'), {
+    window, document, parent: { postMessage() {} }, URL, Request, Response,
+    addEventListener() {}, MutationObserver: class { observe() {} },
+    setTimeout: (_, ms) => timeouts.push(ms), clearTimeout() {},
+  });
+  void window.aioPlugin.request({ path: '/tasks' });
+  void window.fetch('frontend.wasm');
+  assert.deepEqual(timeouts, [30000, 180000]);
+});

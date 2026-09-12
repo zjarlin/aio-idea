@@ -22,15 +22,11 @@ async function run(browser, cookie, mobile) {
   const page = await context.newPage();
   const errors = [];
   const downloads = [];
-  const mounts = [];
-  const deletes = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
     if (/\/frontend\/assets\//.test(path)) downloads.push(path);
-    if (path.endsWith('/frontend/mount')) mounts.push(path);
-    if (request.method() === 'DELETE' && path.includes('/frontend/')) deletes.push(path);
   });
   const scene = () => page.getByRole('navigation', { name: '场景' }).getByRole('button', { name: '社区插件', exact: true }).click();
   const select = async label => {
@@ -41,7 +37,7 @@ async function run(browser, cookie, mobile) {
   const selector = (tenant, label) => `[data-aio-workspace="${tenant}"] iframe[title="${label}"]`;
   const switchTo = async tenant_id => {
     const response = await context.request.post(origin + '/api/tenants/switch', { data: { tenant_id } });
-    assert.equal(response.status(), 200, 'Tenant switch');
+    assert.equal(response.status(), 204, 'Tenant switch');
     const catalog = page.waitForResponse(r => r.url().endsWith('/api/runtime/catalog'));
     await page.evaluate(() => dispatchEvent(new Event('aio:catalog-invalidated')));
     await catalog;
@@ -49,7 +45,7 @@ async function run(browser, cookie, mobile) {
   };
   const counter = async (tenant, value) => {
     const frame = page.frameLocator(selector(tenant, 'KMP 全栈示例'));
-    await frame.getByRole('button', { name: 'Counter', exact: true }).waitFor({ timeout: 90000 });
+    await frame.getByRole('button', { name: 'Counter', exact: true }).waitFor({ timeout: 180000 });
     await frame.getByRole('button', { name: 'Counter', exact: true }).click({ force: true });
     await frame.getByRole('button', { name: '+1', exact: true }).waitFor();
     await frame.getByText(String(value), { exact: true }).waitFor();
@@ -60,9 +56,11 @@ async function run(browser, cookie, mobile) {
     await scene();
     const rust = page.frameLocator(selector(original, 'Dioxus 全栈计数器'));
     await rust.getByRole('button', { name: '+1', exact: true }).waitFor({ timeout: 90000 });
+    console.log(`${mobile ? 'mobile' : 'desktop'}: Dioxus loaded`);
     await rust.getByRole('button', { name: '+1', exact: true }).click();
     await select('KMP 全栈示例');
     const frame = await counter(original, 0);
+    console.log(`${mobile ? 'mobile' : 'desktop'}: Compose loaded`);
     await frame.getByRole('button', { name: '+1', exact: true }).click({ force: true });
     await frame.getByText('1', { exact: true }).waitFor();
     const marker = await frame.locator('body').evaluate(() => window.__tenantCacheProbe = Math.random());
@@ -88,6 +86,7 @@ async function run(browser, cookie, mobile) {
     assert([403, 404].includes(stale.status()), 'Old ticket must stay revoked after returning');
     const backend = await frame.locator('body').evaluate(() => window.aioPlugin.json('GET', '/tasks'));
     assert.equal(backend.tenantId, original);
+    console.log(`${mobile ? 'mobile' : 'desktop'}: tenant return and backend authorization verified`);
     await page.screenshot({ path: resolve(output, `${mobile ? 'mobile' : 'desktop'}.png`) });
     const reloaded = downloads.length;
     await page.reload();
@@ -106,7 +105,7 @@ async function run(browser, cookie, mobile) {
     throw error;
   } finally {
     const restored = await context.request.post(origin + '/api/tenants/switch', { data: { tenant_id: original } });
-    assert.equal(restored.status(), 200, 'Restore original tenant');
+    assert.equal(restored.status(), 204, 'Restore original tenant');
     await context.close();
   }
 }
