@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {randomUUID} = require('node:crypto');
 const {PNG} = require('pngjs');
-const {launchBrowser, select, closeBrowser} = require('./live-session.cjs');
+const {launchBrowser, contextFor, select, closeBrowser} = require('./live-session.cjs');
 
 const base = process.env.AIO_URL || 'http://127.0.0.1:4245';
 const directory = path.resolve('target/component-delivery', new URL(base).hostname === '127.0.0.1' ? 'agent-rehearsal' : 'agent-public');
@@ -11,14 +11,6 @@ const agentGit = 'https://github.com/zjarlin/aio-plugin-agent.git';
 const memoryGit = 'https://github.com/zjarlin/aio-plugin-agent-memory.git';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 fs.mkdirSync(directory, {recursive: true, mode: 0o700});
-function cookies() {
-  return fs.readFileSync(process.env.AIO_COOKIE_FILE, 'utf8').split(/\r?\n/)
-    .filter(line => line && (!line.startsWith('#') || line.startsWith('#HttpOnly_')))
-    .map(line => {
-      const [,,cookiePath,,expires,name,value] = line.replace(/^#HttpOnly_/, '').split('\t');
-      return {name,value,url:new URL(cookiePath,base).href,secure:base.startsWith('https:'),httpOnly:line.startsWith('#HttpOnly_'),...(Number(expires)>0?{expires:Number(expires)}:{})};
-    });
-}
 async function json(response, action) {
   if (!response.ok()) {
     const error = await response.json().catch(()=>({}));
@@ -29,10 +21,11 @@ async function json(response, action) {
 async function openAgent(page, mobile) {
   await page.goto(base);
   await page.locator('.application-shell:visible').waitFor();
+  console.log('Loaded application shell');
   await page.getByRole('navigation', {name:'场景'}).getByRole('button', {name:'工作空间',exact:true}).click();
   await select(page,mobile,'智能体');
   const frame = page.frameLocator('iframe[title="智能体"]');
-  await frame.locator('canvas').first().waitFor();
+  await frame.locator('canvas').first().waitFor({timeout:120000});
   await frame.getByRole('button', {name:'删除会话',exact:true}).waitFor();
   return frame;
 }
@@ -51,20 +44,41 @@ async function eventually(read, accepts) {
 }
 async function run() {
   const browser = await launchBrowser();
-  const context = await browser.newContext({viewport:{width:1440,height:1000},permissions:['clipboard-read','clipboard-write']});
-  await context.addCookies(cookies());
+  const context = await contextFor(browser,base,false);
+  await context.grantPermissions(['clipboard-read','clipboard-write']);
+  let mountedToken;
   const page = await context.newPage(); page.setDefaultTimeout(90000);
+  const pending = new Map();
+  page.on('request',request=>pending.set(request,{path:new URL(request.url()).pathname.replace(/\/components\/assets\/[^/]+/,'/components/assets/[token]'),since:Date.now()}));
+  page.on('requestfinished',request=>pending.delete(request));
+  page.on('requestfailed',request=>pending.delete(request));
   const errors = []; page.on('pageerror',error=>errors.push(error.message));
+  page.on('response',response=>{
+    if(new URL(response.url()).pathname.endsWith('.wasm')) console.log(JSON.stringify({asset:new URL(response.url()).pathname.split('/').at(-1),status:response.status(),encoding:response.headers()['content-encoding']||'identity'}));
+  });
+  page.on('requestfinished',request=>{
+    if(new URL(request.url()).pathname.endsWith('.wasm')) console.log(JSON.stringify({asset:new URL(request.url()).pathname.split('/').at(-1),seconds:request.timing().responseEnd/1000}));
+  });
+  page.on('console',message=>{if(message.type()==='error')errors.push(message.text().replace(/\/components\/assets\/[^/]+/g,'/components/assets/[token]'));});
+  page.on('requestfailed',request=>{
+    const failure=request.failure()?.errorText;
+    if(failure!=='net::ERR_ABORTED') errors.push(`${new URL(request.url()).pathname.replace(/\/components\/assets\/[^/]+/,'/components/assets/[token]')}: ${failure}`);
+  });
   try {
     const marketplace = () => context.request.get(`${base}/api/runtime/marketplace`).then(response=>json(response,'marketplace'));
     if (process.argv[2] === 'publish') {
-      const binary = fs.readFileSync('../aio-plugin-agent/dist/agent-0.1.0.aio-plugin');
-      const publication = await json(await context.request.post(`${base}/api/runtime/components/publish`,{headers:{'content-type':'application/vnd.aio.component+gzip'},data:binary,timeout:240000}),'publish');
-      console.log('Validated Agent process bundle');
-      const download = await context.request.get(`${base}/api/runtime/packages/${publication.revision}`,{timeout:120000});
-      assert(download.ok() && (await download.body()).equals(binary));
-      console.log('Verified package download');
-      await json(await context.request.post(`${base}/api/runtime/components/${publication.revision}/documentation`,{headers:{'content-type':'text/plain'},data:fs.readFileSync('../aio-plugin-agent/README.md','utf8')}),'documentation');
+      const publications = [];
+      for (const name of ['agent','agent-memory']) {
+        const repository = `../aio-plugin-${name}`;
+        const binary = fs.readFileSync(`${repository}/dist/${name}-0.1.0.aio-plugin`);
+        const publication = await json(await context.request.post(`${base}/api/runtime/components/publish`,{headers:{'content-type':'application/vnd.aio.component+gzip'},data:binary,timeout:240000}),`publish ${name}`);
+        console.log(`Validated ${name} bundle`);
+        const download = await context.request.get(`${base}/api/runtime/packages/${publication.revision}`,{timeout:120000});
+        assert(download.ok() && (await download.body()).equals(binary));
+        console.log(`Verified ${name} package download`);
+        await json(await context.request.post(`${base}/api/runtime/components/${publication.revision}/documentation`,{headers:{'content-type':'text/plain'},data:fs.readFileSync(`${repository}/README.md`,'utf8')}),'documentation');
+        publications.push({name,revision:publication.revision});
+      }
       for (const git of [agentGit,memoryGit]) {
         const entry = (await marketplace()).find(entry=>entry.git===git);
         assert(entry, `Missing marketplace source ${git}`);
@@ -74,7 +88,7 @@ async function run() {
       }
       const installed = (await marketplace()).filter(entry=>[agentGit,memoryGit].includes(entry.git));
       assert(installed.every(entry=>entry.installed&&entry.state==='active'));
-      fs.writeFileSync(path.join(directory,'publication.json'),JSON.stringify({revision:publication.revision,installed:installed.map(entry=>({git:entry.git,source:entry.source_id,revision:entry.active_revision}))},null,2));
+      fs.writeFileSync(path.join(directory,'publication.json'),JSON.stringify({publications,installed:installed.map(entry=>({git:entry.git,source:entry.source_id,revision:entry.active_revision}))},null,2));
       console.log('Published and installed Agent + Memory');
       return;
     }
@@ -82,6 +96,7 @@ async function run() {
     const installed = (await marketplace()).find(entry=>entry.git===agentGit);
     assert(installed?.installed, 'Agent is not installed');
     const mount = await json(await context.request.post(`${base}/api/runtime/frontend/mount`,{data:{page_id:`component:${installed.source_id}:chat`}}),'mount');
+    mountedToken = mount.token;
     const direct = async (method,url,value) => {
       const response = await json(await context.request.post(`${base}/api/runtime/components/${mount.token}/request`,{data:{method,path:url,query:null,headers:[{name:'content-type',value:'application/json'}],body:value===undefined?[]:Array.from(Buffer.from(JSON.stringify(value)))}}),'request');
       assert(response.status < 400, `${url}: HTTP ${response.status}`);
@@ -162,7 +177,7 @@ async function run() {
       }
     }
     assert.deepEqual(errors,[]);
-    fs.writeFileSync(path.join(directory,'report.json'),JSON.stringify({base,restart:process.argv[2]==='resume',receipt:true,idempotency:true,controlledReveal:true,localRecall:true,tokens:0,graphActivation:true,desktop:true,mobile:true,errors},null,2));
+    fs.writeFileSync(path.join(directory,'report.json'),JSON.stringify({base,resumedFixture:process.argv[2]==='resume',receipt:true,idempotency:true,controlledReveal:true,localRecall:true,tokens:0,graphActivation:true,desktop:true,mobile:true,errors},null,2));
     console.log('Agent intake, local recall, graph activation, controlled reveal and Compose desktop/mobile passed');
     if (process.env.AIO_AGENT_TEST_CLEANUP==='1') {
       for (const id of new Set(recalled.messages.map(message=>message.sourceId).filter(Boolean))) await memory('DELETE',`/nodes/${id}?spaceId=${fixture.space}`);
@@ -171,10 +186,17 @@ async function run() {
       await direct('DELETE',threadPath);
       fs.unlinkSync(path.join(directory,'fixture.json'));
     }
-    await context.request.delete(`${base}/api/runtime/frontend/${mount.token}`);
   } catch (error) {
     await page.screenshot({path:path.join(directory,'failure.png')}).catch(()=>{});
+    console.error(JSON.stringify({errors}));
+    console.error(JSON.stringify(await page.locator('iframe').evaluateAll(frames=>frames.map(frame=>({title:frame.title,hasSource:!!frame.getAttribute('src'),display:getComputedStyle(frame).display,width:frame.clientWidth,height:frame.clientHeight})))));
+    console.error(JSON.stringify(await page.locator('[data-aio-page]').evaluateAll(pages=>pages.map(page=>({id:page.dataset.aioPage,active:page.dataset.aioPageActive,hidden:page.hidden,children:page.children.length,frames:page.querySelectorAll('iframe').length})))));
+    console.error(JSON.stringify({pending:[...pending.values()].map(value=>({path:value.path,seconds:(Date.now()-value.since)/1000}))}));
+    for (const frame of page.frames().filter(frame=>frame.url().includes('/components/assets/'))) console.error(JSON.stringify(await frame.evaluate(()=>({ready:document.readyState,children:document.body.children.length,scripts:[...document.scripts].map(script=>script.src.split('/').at(-1)),resources:performance.getEntriesByType('resource').map(entry=>({name:entry.name.split('/').at(-1),duration:entry.duration,bytes:entry.encodedBodySize}))}))));
     throw error;
-  } finally { await closeBrowser(browser); }
+  } finally {
+    if(mountedToken) await context.request.delete(`${base}/api/runtime/frontend/${mountedToken}`,{timeout:15000}).catch(()=>{});
+    await closeBrowser(browser);
+  }
 }
 run().catch(error=>{console.error(error.message.split('Call log:')[0]);process.exitCode=1;});

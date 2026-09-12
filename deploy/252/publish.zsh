@@ -72,7 +72,7 @@ test ! -e '$remote_release'
 rm -rf '$incoming'
 mkdir -p '$incoming'"
 print "上传候选发布物"
-tar -C "$release" -cf - . | ssh "$deploy_host" "tar -C '$incoming' -xf -"
+rsync -rlz --checksum --link-dest="$deploy_root/current/" "$release/" "$deploy_host:$incoming/"
 
 print "切换 252 发布物"
 ssh "$deploy_host" "set -eu

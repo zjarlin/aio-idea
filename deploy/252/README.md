@@ -28,7 +28,7 @@ Agent 使用原生 v2 整包中的 Linux ELF 与 Compose 前端，Pi SDK 依赖�
 
 `process-rehearsal.cjs` 在 252 的 `/opt/aio-idea/process-test-20260913` 使用独立 PostgreSQL 集群恢复 `snapshot.dump`，避免同集群数据库角色名与生产冲突。`prepare` 恢复副本并停用复制的安装和发布任务；`start` 启动该目录里的候选二进制与独立监督器；`stop` 只终止该目录的进程。宿主使用 4245 回环端口。新旧监督器均校验自身目录归属，演练清理不会停止生产插件。
 
-通过演练后按下节发布宿主，再上传真实 Agent 整包，先安装父插件智能体，再安装智能体记忆。`tests/browser/agent-process.cjs publish` 执行发布和安装，默认命令验证对话与图谱，`resume` 验证重启后的同一批资料。设置 `AIO_AGENT_TEST_CLEANUP=1` 删除验收来源和会话；保留两个正式插件的安装。
+通过演练后按下节发布宿主，再上传真实 Agent 整包，先安装父插件智能体，再安装智能体记忆。`tests/browser/agent-process.cjs publish` 执行发布和安装，默认命令验证对话与图谱，`resume` 复用同一批资料继续验证；它本身不执行重启。设置 `AIO_AGENT_TEST_CLEANUP=1` 删除验收来源和会话；保留两个正式插件的安装。
 
 ## Rust Source 发布
 
@@ -42,6 +42,8 @@ Agent 使用原生 v2 整包中的 Linux ELF 与 Compose 前端，Pi SDK 依赖�
 发布器拒绝未提交的工作树和非完整 SHA。它会在本地分别执行服务端测试、Web 检查、glibc 2.17 服务端构建和 Web 构建，将候选二进制、前端资源、`aio.toml` 和两项 systemd 单元上传到远端临时目录。切换前会备份现有 unit 与 enabled 状态；候选服务只有在 `aio-idea.service` 的 `MainPID` 确实执行当前 release 二进制后，本机 `/health` 才会被接受，随后还必须在 60 秒内通过公网健康检查。任一步失败都会恢复旧链接、unit、enabled 状态和服务，并删除失败发布目录。
 
 可以用绝对路径 `AIO_DEPLOY_TARGET_DIR` 复用本机 Cargo 编译缓存；源码仍来自完整 SHA 的隔离 worktree，所有测试及构建照常执行。
+
+本机与 252 均需安装 `rsync`。传输按内容校验，并压缩发送变更文件；与当前版本内容相同的资产通过硬链接复用，新文件仍落入独立候选目录。后续只切换目录链接，不原地改写已发布文件。
 
 ## 原生 v2 Component
 

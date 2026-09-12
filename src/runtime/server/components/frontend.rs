@@ -225,14 +225,49 @@ fn render(bytes: &[u8], prefix: &str, entry: &str) -> Result<Vec<u8>> {
         .as_node()
         .clone();
     script.detach();
-    script.append(kuchikiki::NodeRef::new_text(
+    for source in [
+        az_plugin_runtime::FRONTEND_WASM,
         az_plugin_runtime::FRONTEND_GUEST,
-    ));
+    ] {
+        script.append(kuchikiki::NodeRef::new_text(source));
+    }
     head.prepend(script);
     head.prepend(node);
     let mut output = Vec::new();
     document.serialize(&mut output)?;
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installs_shared_loaders_before_plugin_scripts() -> Result<()> {
+        let output = render(
+            b"<html><head><script type='module' src='app.mjs'></script></head><body></body></html>",
+            "https://aio.test/assets/ticket/",
+            "index.html",
+        )?;
+        let document = kuchikiki::parse_html()
+            .one(String::from_utf8(output)?)
+            .document_node;
+        let scripts = document
+            .select("script")
+            .map_err(|_| anyhow::anyhow!("script selector failed"))?
+            .collect::<Vec<_>>();
+        assert_eq!(scripts.len(), 2);
+        assert_eq!(
+            scripts[0].text_contents(),
+            format!(
+                "{}{}",
+                az_plugin_runtime::FRONTEND_WASM,
+                az_plugin_runtime::FRONTEND_GUEST
+            )
+        );
+        assert_eq!(scripts[1].attributes.borrow().get("src"), Some("app.mjs"));
+        Ok(())
+    }
 }
 
 pub(super) async fn request(

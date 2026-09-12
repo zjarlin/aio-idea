@@ -10,9 +10,9 @@ base64 = "0.22.1"
 anyhow = "1.0.99"
 async-trait = { version = "0.1", optional = true }
 futures-util = { version = "0.3", optional = true }
-az-plugin-bundle = { git = "https://github.com/zjarlin/aio-platform.git", rev = "13c6cdf8069ab9fded618b4a22e85b74341e7e6c", optional = true }
-az-plugin-contract = { git = "https://github.com/zjarlin/aio-platform.git", rev = "13c6cdf8069ab9fded618b4a22e85b74341e7e6c", optional = true }
-az-plugin-runtime = { git = "https://github.com/zjarlin/aio-platform.git", rev = "13c6cdf8069ab9fded618b4a22e85b74341e7e6c", optional = true }
+az-plugin-bundle = { git = "https://github.com/zjarlin/aio-platform.git", rev = "d30d2fac4b4ccd8c0b319a1676b85324d54112d5", optional = true }
+az-plugin-contract = { git = "https://github.com/zjarlin/aio-platform.git", rev = "d30d2fac4b4ccd8c0b319a1676b85324d54112d5", optional = true }
+az-plugin-runtime = { git = "https://github.com/zjarlin/aio-platform.git", rev = "d30d2fac4b4ccd8c0b319a1676b85324d54112d5", optional = true }
 semver = { version = "1", optional = true }
 getrandom = { version = "0.4.2", optional = true }
 axum = { version = "0.8.6", optional = true }
