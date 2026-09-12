@@ -28,7 +28,8 @@ function fixture() {
     },
   };
   const env = {
-    window: {}, caches, crypto: webcrypto, Response, URL, location: { origin: 'https://aio.test' },
+    window: {}, caches, crypto: webcrypto, Response, URL, AbortSignal, location: { origin: 'https://aio.test' },
+    setTimeout: callback => setTimeout(callback, 0),
     fetch: async (url, options) => {
       requests.push({ url, options });
       return new Response(bytes, { headers: { 'content-type': 'text/javascript' } });
@@ -114,5 +115,46 @@ test('large asset transfers have a separate timeout from business requests', () 
   });
   void window.aioPlugin.request({ path: '/tasks' });
   void window.fetch('frontend.wasm');
-  assert.deepEqual(timeouts, [30000, 180000]);
+  assert.deepEqual(timeouts, [30000, 600000]);
+});
+
+test('transient transport and server failures retry before verified delivery', async () => {
+  const f = fixture();
+  let calls = 0;
+  f.env.fetch = async () => {
+    calls++;
+    if (calls === 1) throw new TypeError('network');
+    if (calls === 2) return new Response('', { status: 503 });
+    return new Response(f.bytes);
+  };
+  const result = await f.create(f.config)('app.js', 'ticket');
+  assert.equal(calls, 3);
+  assert.deepEqual(Buffer.from(result.bytes), f.bytes);
+});
+
+test('persistent download failures stop after three attempts', async () => {
+  const f = fixture();
+  let calls = 0;
+  f.env.fetch = async () => { calls++; return new Response('', { status: 503 }); };
+  await assert.rejects(f.create(f.config)('app.js', 'ticket'), /HTTP 503/);
+  assert.equal(calls, 3);
+});
+
+test('revoked access and integrity mismatches do not retry', async () => {
+  for (const [response, error] of [[new Response('', { status: 403 }), /HTTP 403/], [new Response('modified'), /摘要/]]) {
+    const f = fixture();
+    let calls = 0;
+    f.env.fetch = async () => { calls++; return response; };
+    await assert.rejects(f.create(f.config)('app.js', 'ticket'), error);
+    assert.equal(calls, 1);
+  }
+});
+
+test('disposed mounts do not continue retrying', async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  let calls = 0;
+  f.env.fetch = async () => { calls++; controller.abort(); throw new Error('cancelled'); };
+  await assert.rejects(f.create(f.config)('app.js', 'ticket', controller.signal), /cancelled/);
+  assert.equal(calls, 1);
 });

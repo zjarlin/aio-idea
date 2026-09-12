@@ -1,8 +1,7 @@
 const assert=require('node:assert/strict');
 const {mkdir,writeFile}=require('node:fs/promises');
 const {resolve}=require('node:path');
-const {chromium}=require('playwright');
-const {contextFor,marketplace}=require('./live-session.cjs');
+const {contextFor,marketplace,launchBrowser,closeContext,closeBrowser}=require('./live-session.cjs');
 const base=process.env.AIO_URL||'https://aio.addzero.site';
 const output=resolve('target/delivery-test');
 const temporaryGit='https://github.com/zjarlin/aio-delivery-e2e-typescript.git';
@@ -52,10 +51,10 @@ async function run(browser,mobile){
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);
     return {viewport:mobile?'mobile':'desktop',readmeImage:true,search:true,navigation:true,management:!mobile};
   }catch(error){await page.screenshot({path:resolve(output,`${mobile?'mobile':'desktop'}-marketplace-live-failure.png`)});throw error;}
-  finally{await context.close();}
+  finally{await closeContext(context);}
 }
 (async()=>{
-  await mkdir(output,{recursive:true});const browser=await chromium.launch({channel:'chrome',headless:true});
+  await mkdir(output,{recursive:true});const browser=await launchBrowser();
   try{const report=[await run(browser,false),await run(browser,true)];await writeFile(resolve(output,'marketplace-live-report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));}
-  finally{await browser.close();}
+  finally{await closeBrowser(browser);}
 })().catch(error=>{console.error(error);process.exitCode=1;});

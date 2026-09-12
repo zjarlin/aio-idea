@@ -1,4 +1,8 @@
 const { readFile } = require('node:fs/promises');
+const {chromium}=require('playwright');
+
+const launchBrowser=()=>chromium.launch({channel:'chrome',headless:true,args:['--disable-quic',...(process.env.AIO_BROWSER_HTTP1==='1'?['--disable-http2']:[])]});
+const grants=new WeakMap();
 
 async function contextFor(browser,base,mobile) {
   const context=await browser.newContext({viewport:mobile?{width:390,height:844}:{width:1440,height:1000}});
@@ -8,7 +12,20 @@ async function contextFor(browser,base,mobile) {
     return {name,value,url:new URL(path,base).href,httpOnly:line.startsWith('#HttpOnly_'),secure:secure==='TRUE',...(Number(expires)>0?{expires:Number(expires)}:{})};
   });
   await context.addCookies(cookies);
+  const tickets=new Set();grants.set(context,{base,tickets});
+  context.on('response',response=>{
+    if(response.url()===`${base}/api/runtime/frontend/mount`&&response.ok())void response.json().then(body=>tickets.add(body.data.token)).catch(()=>{});
+  });
   return context;
+}
+async function closeContext(context) {
+  const issued=grants.get(context);
+  if(issued)await Promise.allSettled([...issued.tickets].map(token=>context.request.delete(`${issued.base}/api/runtime/frontend/${token}`,{timeout:15000})));
+  await context.close();
+}
+async function closeBrowser(browser) {
+  await Promise.allSettled(browser.contexts().map(closeContext));
+  await browser.close();
 }
 async function select(page,mobile,label) {
   if(mobile)await page.getByRole('button',{name:'打开菜单',exact:true}).click();
@@ -35,4 +52,4 @@ async function getJson(context,url) {
   }
   throw new Error(`Read failed: ${new URL(url).pathname}`);
 }
-module.exports={contextFor,select,marketplace,getJson};
+module.exports={contextFor,select,marketplace,getJson,launchBrowser,closeContext,closeBrowser};

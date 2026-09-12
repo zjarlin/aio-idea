@@ -1,9 +1,8 @@
 const assert=require('node:assert/strict');
 const {mkdir,writeFile}=require('node:fs/promises');
 const {resolve}=require('node:path');
-const {chromium}=require('playwright');
 const {PNG}=require('pngjs');
-const {contextFor,select,marketplace,getJson}=require('./live-session.cjs');
+const {contextFor,select,marketplace,getJson,launchBrowser,closeBrowser}=require('./live-session.cjs');
 const base=process.env.AIO_URL||'https://aio.addzero.site';
 const output=resolve('target/delivery-test');
 const mode=process.env.AIO_DELIVERY_E2E_MODE||'counter';
@@ -36,9 +35,12 @@ async function prepare(browser,mobile) {
   console.log(`Opening ${mobile?'mobile':'desktop'} ${mode} page`);
   const context=await contextFor(browser,base,mobile);const page=await context.newPage();
   const events={mainNavigations:0,mounts:[],errors:[]};
+  page.deliveryEvents=events;
   page.on('framenavigated',frame=>{if(frame===page.mainFrame())events.mainNavigations++;});
   page.on('request',request=>{if(request.url().endsWith('/api/runtime/frontend/mount'))events.mounts.push({at:Date.now(),body:request.postDataJSON()});});
   page.on('pageerror',error=>events.errors.push(error.message));
+  page.on('requestfailed',request=>{console.log(JSON.stringify({viewport:mobile?'mobile':'desktop',failed:new URL(request.url()).pathname,error:request.failure()}));});
+  page.on('response',response=>{if(response.url().includes('/api/runtime/frontend/')&&response.status()>=400)console.log(JSON.stringify({status:response.status(),path:new URL(response.url()).pathname}));});
   await page.goto(base);await page.locator('.application-shell:visible').waitFor();
   const initial=await metadata(context);
   console.log(`${mobile?'mobile':'desktop'} baseline ${initial.entry.rev}`);
@@ -60,7 +62,7 @@ async function prepare(browser,mobile) {
   const otherMarker=await other.locator('body').evaluate(()=>window.__deliveryOtherMarker=Math.random());
   await select(page,mobile,'KMP 全栈示例');
   const frame=page.frameLocator('iframe[title="KMP 全栈示例"]');
-  await frame.getByRole('button',{name:'Counter',exact:true}).waitFor({timeout:90000});
+  await frame.getByRole('button',{name:'Counter',exact:true}).waitFor({timeout:180000});
   await page.waitForTimeout(700);await frame.getByRole('button',{name:'Counter',exact:true}).click({force:true});
   await frame.getByText('KMP Counter',{exact:true}).waitFor();
   await counter(page,frame);
@@ -97,7 +99,7 @@ async function verify(item){
 }
 (async()=>{
   await mkdir(output,{recursive:true});
-  const browser=await chromium.launch({channel:'chrome',headless:true});
+  const browser=await launchBrowser();
   try {
     if(process.env.AIO_DELIVERY_BASE_SHA){
       const context=await contextFor(browser,base,false);const deadline=Date.now()+3600000;
@@ -120,5 +122,13 @@ async function verify(item){
     const report=await Promise.all(items.map(verify));
     await writeFile(resolve(output,`${mode}-report.json`),JSON.stringify(report,null,2));
     console.log(JSON.stringify(report.map(({viewport,mode,observedAt,changedCanvasPixels,latest})=>({viewport,mode,observedAt,changedCanvasPixels,revision:latest.entry.rev,source:latest.details.source_revision}))));
-  }finally{await browser.close();}
+  }catch(error){
+    let index=0;
+    for(const context of browser.contexts())for(const page of context.pages()){
+      const frames=await Promise.all(page.frames().filter(frame=>frame!==page.mainFrame()).map(async frame=>({url:frame.url(),text:await frame.locator('body').innerText().catch(()=>''),resources:await frame.evaluate(()=>performance.getEntriesByType('resource').map(({name,duration,transferSize})=>({name,duration,transferSize}))).catch(()=>[])})));
+      await page.screenshot({path:resolve(output,`${mode}-${index++}-failure.png`)});
+      console.error(JSON.stringify({events:page.deliveryEvents,text:await page.locator('body').innerText(),frames}));
+    }
+    throw error;
+  }finally{await closeBrowser(browser);}
 })().catch(error=>{console.error(error);process.exitCode=1;});

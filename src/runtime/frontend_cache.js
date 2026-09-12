@@ -23,6 +23,20 @@ function createFrontendAssetCache(config) {
     });
     return shared.writes;
   };
+  const download = async (url, signal) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const timeout = AbortSignal.timeout(120000);
+        const response = await fetch(url, { credentials: 'same-origin', redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+        if (response.status === 429 || response.status >= 500) throw new Error(`读取插件资源失败: HTTP ${response.status}`);
+        if (!response.ok) return { error: `读取插件资源失败: HTTP ${response.status}` };
+        return { bytes: await response.arrayBuffer(), type: response.headers.get('content-type') || 'application/octet-stream' };
+      } catch (error) {
+        if (signal?.aborted || attempt === 2) throw error;
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+      }
+    }
+  };
   return async (path, ticket, signal) => {
     if (!Object.hasOwn(config.assets, path)) throw new Error('插件未声明该资源');
     const expected = config.assets[path];
@@ -37,11 +51,10 @@ function createFrontendAssetCache(config) {
         if (await digest(bytes) === expected) return { bytes, type: cached.headers.get('content-type') };
         await cache.delete(key).catch(() => {});
       }
-      const response = await fetch(`/api/runtime/frontend/assets/${ticket}/${path.split('/').map(encodeURIComponent).join('/')}`, { credentials: 'same-origin', redirect: 'error', signal });
-      if (!response.ok) throw new Error(`读取插件资源失败: HTTP ${response.status}`);
-      const bytes = await response.arrayBuffer();
+      const result = await download(`/api/runtime/frontend/assets/${ticket}/${path.split('/').map(encodeURIComponent).join('/')}`, signal);
+      if (result.error) throw new Error(result.error);
+      const { bytes, type } = result;
       if (bytes.byteLength > limit || await digest(bytes) !== expected) throw new Error('插件资源摘要或大小校验失败');
-      const type = response.headers.get('content-type') || 'application/octet-stream';
       if (cache) await save(cache, key, bytes, type).catch(() => {});
       return { bytes, type };
     })();

@@ -42,7 +42,7 @@ const receive = async (event) => {
     return reply({ id: message.id, error: error.message });
   }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), typeof message.asset === 'string' ? 150000 : 25000);
+  const timeout = setTimeout(() => controller.abort(), typeof message.asset === 'string' ? 540000 : 25000);
   requests.set(message.id, controller);
   const generation = epoch;
   try {

@@ -1,8 +1,7 @@
 const assert=require('node:assert/strict');
 const {mkdir,writeFile}=require('node:fs/promises');
 const {resolve}=require('node:path');
-const {chromium}=require('playwright');
-const {contextFor,select,getJson}=require('./live-session.cjs');
+const {contextFor,select,getJson,launchBrowser,closeBrowser}=require('./live-session.cjs');
 const base=process.env.AIO_URL||'https://aio.addzero.site';
 const scenario=process.env.AIO_DELIVERY_SCENARIO||'e2e';
 assert(['e2e','acceptance'].includes(scenario));
@@ -14,7 +13,7 @@ const plugins=[
 
 (async()=>{
   const output=resolve('target/delivery-test');await mkdir(output,{recursive:true});
-  const browser=await chromium.launch({channel:'chrome',headless:true});
+  const browser=await launchBrowser();
   const context=await contextFor(browser,base,false);const page=await context.newPage();const errors=[];const responses=[];const network=[];
   page.on('pageerror',error=>errors.push(error.message));
   page.on('requestfailed',request=>network.push({url:request.url(),failure:request.failure()}));
@@ -58,5 +57,5 @@ const plugins=[
     await page.screenshot({path:resolve(output,`${scenario}-${process.env.AIO_DELIVERY_LANGUAGE||'all'}-cli-failure.png`)});
     console.error(JSON.stringify({frames,calls:await Promise.all(responses),errors,network}));
     throw error;
-  }finally{await browser.close();}
+  }finally{await closeBrowser(browser);}
 })().catch(error=>{console.error(error);process.exitCode=1;});
