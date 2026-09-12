@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {contextFor, launchBrowser, closeContext, closeBrowser} = require('./live-session.cjs');
+const {contextFor, launchBrowser, closeContext, closeBrowser, viewportScreenshot} = require('./live-session.cjs');
 const base = process.env.AIO_URL || 'https://aio.addzero.site';
 const output = path.resolve(process.env.AIO_PERFORMANCE_OUTPUT || 'target/startup-test');
 (async () => {
@@ -48,7 +48,7 @@ const output = path.resolve(process.env.AIO_PERFORMANCE_OUTPUT || 'target/startu
         resources: performance.getEntriesByType('resource').map(({name, startTime, responseStart, responseEnd, transferSize, encodedBodySize, decodedBodySize}) =>
           ({path: new URL(name).pathname, startTime, responseStart, responseEnd, transferSize, encodedBodySize, decodedBodySize}))}));
       const startupApiRequests = metrics.resources.filter(resource => resource.startTime <= workspaceDomMs && ['/api/runtime/bootstrap', '/api/runtime/catalog', '/api/auth/session'].includes(resource.path)).length;
-      await page.screenshot({path: path.join(output, `${mobile ? 'mobile' : 'desktop'}-${phase}-startup.png`)});
+      await viewportScreenshot(page, path.join(output, `${mobile ? 'mobile' : 'desktop'}-${phase}-startup.png`));
       report.push({viewport: mobile ? 'mobile' : 'desktop', phase, readyMs, workspaceDomMs, startupApiRequests, documentHeaders, requests, failures, failure,
         visibleText: failure ? await page.locator('body').innerText() : undefined, metrics});
       fs.writeFileSync(path.join(output, 'startup-report.json'), JSON.stringify(report, null, 2));
