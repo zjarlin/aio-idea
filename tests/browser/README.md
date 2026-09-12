@@ -1,5 +1,9 @@
 # 导航浏览器验收
 
+`startup.cjs` 在真实 Web 壳中验证单次首屏请求、304、网络与响应正文超时、重试恢复、焦点事件不打断请求、后台失败保留工作区，以及注销清理。桌面和移动端报告输出到 `target/startup-test/local`，需 Node 可解析 Playwright 并安装本机 Chrome。
+
+`startup-live.cjs` 使用 `AIO_URL` 和 `AIO_COOKIE_FILE` 测量公网桌面/移动端冷启动及缓存重载，保存 API Server-Timing、资源体积、加载时序和截图到 `AIO_PERFORMANCE_OUTPUT`。不输出 Cookie。
+
 `verify-delivery-evidence.cjs` 对公网浏览器报告与数据库快照交叉校验，断言三种首次 push 到真实后端调用不超过 60 分钟、激活后 60 秒内开始重新挂载、源码 SHA 一致以及更新期间没有整页导航。
 
 `cleanup-delivery-live.cjs` 通过正式卸载接口清理六个精确命名的临时插件，保留其他安装；数据库清理后以 `verify` 参数再次验证市场中已不存在临时来源。

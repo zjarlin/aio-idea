@@ -10,7 +10,7 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     routing::{any, get},
 };
-use tower_http::services::{ServeDir, ServeFile};
+mod static_files;
 
 use crate::{plugins, runtime};
 
@@ -29,8 +29,7 @@ pub async fn run() -> Result<()> {
     let web_dist = env::var_os("AIO_WEB_DIST")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("target/dx/aio-idea/release/web/public"));
-    let index = web_dist.join("index.html");
-    let application = ServeDir::new(web_dist).fallback(ServeFile::new(index));
+    let application = static_files::application(web_dist);
     let plugin_catalog = plugins::server_catalog()?;
     let identity = aio_plugin_identity_server::service(&plugin_catalog)?;
     identity.initialize().await?;

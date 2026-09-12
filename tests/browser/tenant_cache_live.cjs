@@ -38,7 +38,7 @@ async function run(browser, cookie, mobile) {
   const switchTo = async tenant_id => {
     const response = await context.request.post(origin + '/api/tenants/switch', { data: { tenant_id } });
     assert.equal(response.status(), 204, 'Tenant switch');
-    const catalog = page.waitForResponse(r => r.url().endsWith('/api/runtime/catalog'));
+    const catalog = page.waitForResponse(r => r.url().endsWith('/api/runtime/bootstrap'));
     await page.evaluate(() => dispatchEvent(new Event('aio:catalog-invalidated')));
     await catalog;
     await page.locator(`[data-aio-workspace="${tenant_id}"][data-aio-workspace-active="true"]`).first().waitFor({ state: 'attached' });

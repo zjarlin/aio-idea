@@ -46,6 +46,8 @@ print "构建 glibc 2.17 服务端"
 cargo zigbuild --release --target "$target" --no-default-features --features server
 print "构建 Web 资产"
 dx build --platform web --release --debug-symbols false
+npm ci --prefix deploy --ignore-scripts --no-audit --no-fund
+node deploy/prepare-web.cjs
 
 readonly release="$artifact/release"
 mkdir -p "$release"

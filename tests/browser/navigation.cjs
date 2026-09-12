@@ -63,14 +63,16 @@ async function returnToWorkspace(page) {
 async function scenario(browser, mobile) {
   const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, isMobile: mobile });
   // 只在测试响应中加入社区账户页，验证通用挂载契约，不修改租户数据。
-  await context.route("**/api/runtime/catalog", async (route) => {
-    const response = await route.fetch();
-    const catalog = await response.json();
+  await context.route("**/api/runtime/bootstrap", async (route) => {
+    const response = await route.fetch({headers: {...route.request().headers(), 'if-none-match': ''}});
+    const snapshot = await response.json();
+    if (!snapshot.data) return route.fulfill({response});
+    const catalog = {data: snapshot.data.catalog};
     catalog.data.pages.push({ id: "navigation-workspace-test", label: "测试工作区", icon: null, scene: { id: "workspace", label: "工作区" }, menu_path: [], required_permission: null, body: { kind: "text", title: "测试工作区", content: "导航测试" } });
     catalog.data.pages.push({ id: "navigation-state-test", label: "导航状态", icon: null, scene: { id: "community", label: "社区插件" }, menu_path: [], required_permission: null, body: { kind: "counter", title: "导航状态", button: "状态 +1" } });
     catalog.data.pages.push({ id: "account-extension-test", label: "社区账户扩展", icon: null, scene: { id: "community", label: "社区插件" }, menu_path: [], required_permission: null, body: { kind: "counter", title: "社区账户扩展", button: "扩展 +1" } });
     catalog.data.account_items.push({ id: "open-account-extension-test", label: "社区账户扩展", icon: null, page_id: "account-extension-test", required_permission: null });
-    await route.fulfill({ response, json: catalog });
+    await route.fulfill({ response, json: snapshot });
   });
   const page = await context.newPage();
   const errors = [];

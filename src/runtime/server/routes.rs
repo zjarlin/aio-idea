@@ -94,6 +94,7 @@ pub fn router(state: RuntimeState) -> Router {
             post(uninstall),
         )
         .merge(super::delivery::router())
+        .merge(super::bootstrap::router())
         .with_state(state)
 }
 

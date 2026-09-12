@@ -52,6 +52,7 @@ const server = createServer(async (req, res) => {
   try {
     const path = decodeURIComponent(new URL(req.url, origin).pathname);
     if (path === '/api/auth/session') return send(200, { data: fixture.session });
+    if (path === '/api/runtime/bootstrap') return send(200, {data: fixture.session ? {catalog: fixture.catalog, permissions: fixture.session.permissions} : null});
     if (path === '/api/runtime/catalog') return send(200, { data: fixture.catalog });
     if (path === '/api/runtime/frontend/mount') {
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
@@ -116,7 +117,7 @@ async function run(browser, mobile) {
     await nav.getByRole('button', { name: label, exact: true }).click();
   };
   const refresh = async () => {
-    const response = page.waitForResponse(r => r.url().endsWith('/api/runtime/catalog'));
+    const response = page.waitForResponse(r => r.url().endsWith('/api/runtime/bootstrap'));
     await page.evaluate(() => dispatchEvent(new Event('aio:catalog-invalidated')));
     await response;
   };
@@ -238,7 +239,7 @@ async function run(browser, mobile) {
     await frame.locator('canvas').first().waitFor({ timeout: 60000 });
     assert.deepEqual(await page.evaluate(() => caches.keys()), ['aio-plugin-assets-v1-login-b']);
     fixture.session = null;
-    const logout = page.waitForResponse(r => r.url().endsWith('/api/auth/session'));
+    const logout = page.waitForResponse(r => r.url().endsWith('/api/runtime/bootstrap'));
     await page.evaluate(() => dispatchEvent(new Event('aio:catalog-invalidated')));
     await logout;
     await iframe.waitFor({ state: 'detached' });

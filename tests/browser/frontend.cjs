@@ -16,11 +16,13 @@ assert(base && cli && plugin && output && tenant, "需要测试宿主、CLI、�
 const git = `https://example.com/dioxus-${crypto.randomUUID()}.git`;
 
 async function workspaceFixture(context) {
-  await context.route('**/api/runtime/catalog', async route => {
-    const response = await route.fetch();
-    const catalog = await response.json();
+  await context.route('**/api/runtime/bootstrap', async route => {
+    const response = await route.fetch({headers: {...route.request().headers(), 'if-none-match': ''}});
+    const snapshot = await response.json();
+    if (!snapshot.data) return route.fulfill({response});
+    const catalog = {data: snapshot.data.catalog};
     catalog.data.pages.push({ id: 'frontend-workspace-test', label: '测试工作区', icon: null, scene: { id: 'workspace', label: '工作区' }, menu_path: [], required_permission: null, body: { kind: 'text', title: '测试工作区', content: '浏览器测试' } });
-    await route.fulfill({ response, json: catalog });
+    await route.fulfill({ response, json: snapshot });
   });
 }
 

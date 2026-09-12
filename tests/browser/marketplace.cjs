@@ -28,6 +28,7 @@ const server = createServer(async (req,res)=>{
   try {
     const path=new URL(req.url,'http://localhost').pathname;
     if(path==='/api/auth/session') return send(session);
+    if(path==='/api/runtime/bootstrap') return send({catalog,permissions:session.permissions});
     if(path==='/api/runtime/catalog') return send(catalog);
     if(path==='/api/runtime/marketplace') return send(entries);
     if(path.endsWith('/details')) return send({readme:`# ${revision[0]==='a'?'Counter workspace':'Updated documentation'}\n\nAIO Fullstack\n\n## Modules\n\n| Module | Runtime |\n|---|---|\n| Frontend | Browser |\n| Backend | Process |\n\n\`\`\`typescript\nconst count = 1;\n\`\`\`\n\n![Preview](docs/preview.png)\n\n[Source](shared/model.ts)\n\n<script>window.__readmeExecuted=true</script>\n\n[unsafe](javascript:alert(1))`,version:'0.0.0-dev.1',source_revision:'c'.repeat(40),versions:[{revision,version:'0.0.0-dev.1',source_revision:'c'.repeat(40),created_at:'2026-09-12'}],builds:[]});
