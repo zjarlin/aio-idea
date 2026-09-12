@@ -31,6 +31,17 @@ fn main() {
 #[cfg(any(feature = "web", feature = "desktop"))]
 #[allow(non_snake_case)]
 fn App() -> dioxus::prelude::Element {
+    use dioxus::prelude::*;
+
+    rsx! {
+        az_ui_components::UiStylesheets {}
+        Workspace {}
+    }
+}
+
+#[cfg(any(feature = "web", feature = "desktop"))]
+#[dioxus::prelude::component]
+fn Workspace() -> dioxus::prelude::Element {
     use az_dioxus_admin_shell::{
         ApplicationAccountItem, ApplicationMenuGroup, ApplicationRuntimePage, ApplicationUser,
         PluginApplication,
@@ -81,7 +92,7 @@ fn App() -> dioxus::prelude::Element {
         result => result,
     };
     let Some(application_result) = result else {
-        return standalone_page(rsx! { p { role: "status", aria_busy: "true", "正在加载工作区" } });
+        return rsx! { p { role: "status", aria_busy: "true", "正在加载工作区" } };
     };
     let snapshot = match application_result {
         Ok(startup::LoadedApplication {
@@ -89,23 +100,23 @@ fn App() -> dioxus::prelude::Element {
             ..
         }) => snapshot,
         Ok(startup::LoadedApplication { snapshot: None, .. }) => {
-            return standalone_page(rsx! { aio_plugin_identity_client::LoginPage {} });
+            return rsx! { aio_plugin_identity_client::LoginPage {} };
         }
         Err(error) => {
-            return standalone_page(rsx! {
+            return rsx! {
                 p { role: "alert", "{error}" }
                 az_ui_components::button::Button {
                     onclick: move |_| application.restart(),
                     "重试"
                 }
-            });
+            };
         }
     };
     let catalog = snapshot.catalog;
     let mut static_plugins = match plugins::client_catalog() {
         Ok(value) => value,
         Err(error) => {
-            return standalone_page(rsx! { p { role: "alert", "加载应用页面失败: {error}" } });
+            return rsx! { p { role: "alert", "加载应用页面失败: {error}" } };
         }
     };
     static_plugins.pages.retain(|page| {
@@ -183,15 +194,5 @@ fn App() -> dioxus::prelude::Element {
             },
           }
         }
-    }
-}
-
-#[cfg(any(feature = "web", feature = "desktop"))]
-fn standalone_page(content: dioxus::prelude::Element) -> dioxus::prelude::Element {
-    use dioxus::prelude::*;
-
-    rsx! {
-        az_ui_components::UiStylesheets {}
-        {content}
     }
 }

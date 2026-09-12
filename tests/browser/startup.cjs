@@ -56,6 +56,7 @@ async function run(browser, mobile) {
   try {
     mode = 'embedded'; revision = 'a'; requests = [];
     await page.goto(origin); await shell.waitFor();
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.application-shell')).display === 'grid');
     assert.equal(requests.length, 0, 'An authenticated HTML snapshot must render without an extra startup request');
     assert.equal(await page.locator('#aio-startup-snapshot').count(), 0, 'Consume the document snapshot only once');
     const embeddedPoll = page.waitForResponse(r => r.url().endsWith('/bootstrap') && r.status() === 304);
@@ -65,6 +66,7 @@ async function run(browser, mobile) {
     const start = performance.now();
     await page.goto(origin);
     await shell.waitFor();
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.application-shell')).display === 'grid');
     const coldMs = performance.now() - start;
     assert.equal(requests.length, 1, 'Startup should use one HTTP snapshot');
     await shell.evaluate(node => node.dataset.startupMarker = 'retained');
