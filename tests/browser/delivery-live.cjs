@@ -34,9 +34,9 @@ async function counter(page,frame) {
 async function prepare(browser,mobile) {
   console.log(`Opening ${mobile?'mobile':'desktop'} ${mode} page`);
   const context=await contextFor(browser,base,mobile);const page=await context.newPage();
-  const events={mainNavigations:0,mounts:[],errors:[]};
+  const events={mainNavigations:0,navigationUrls:[],mounts:[],errors:[]};
   page.deliveryEvents=events;
-  page.on('framenavigated',frame=>{if(frame===page.mainFrame())events.mainNavigations++;});
+  page.on('framenavigated',frame=>{if(frame===page.mainFrame()){events.mainNavigations++;events.navigationUrls.push(frame.url());}});
   page.on('request',request=>{if(request.url().endsWith('/api/runtime/frontend/mount'))events.mounts.push({at:Date.now(),body:request.postDataJSON()});});
   page.on('pageerror',error=>events.errors.push(error.message));
   page.on('requestfailed',request=>{console.log(JSON.stringify({viewport:mobile?'mobile':'desktop',failed:new URL(request.url()).pathname,error:request.failure()}));});
@@ -92,10 +92,10 @@ async function verify(item){
   assert.equal(latest.entry.rev,latest.entry.active_revision);
   assert.notEqual(latest.details.source_revision,initial.details.source_revision);
   assert.equal(await page.evaluate(()=>window.__deliveryShellMarker),item.shellMarker);
-  assert.equal(events.mainNavigations,1);assert.deepEqual(events.errors,[]);
+  assert.equal(events.mainNavigations,item.baselineNavigations);assert.deepEqual(events.errors,[]);
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:resolve(output,`${mobile?'mobile':'desktop'}-${mode}-after.png`)});
-  return {viewport:mobile?'mobile':'desktop',mode,observedAt,changedCanvasPixels:painted,mainNavigations:events.mainNavigations,mounts:events.mounts,initial,latest};
+  return {viewport:mobile?'mobile':'desktop',mode,observedAt,changedCanvasPixels:painted,initialNavigations:item.baselineNavigations,navigationsDuringUpdate:events.mainNavigations-item.baselineNavigations,mounts:events.mounts,initial,latest};
 }
 (async()=>{
   await mkdir(output,{recursive:true});
@@ -111,6 +111,7 @@ async function verify(item){
       await context.close();
     }
     const items=[await prepare(browser,false),await prepare(browser,true)];
+    for(const item of items)item.baselineNavigations=item.events.mainNavigations;
     const counts=items.map(item=>item.events.mounts.length);
     await Promise.all(items.map(item=>item.page.waitForTimeout(61000)));
     for(let i=0;i<items.length;i++){
