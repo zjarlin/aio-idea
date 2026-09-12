@@ -2,6 +2,8 @@
 
 日期：2026-09-12。正式入口：<https://aio.addzero.site>。
 
+本文保留 2026-09-12 的历史交付记录。Agent 的真实 process 包及 Memory 联合安装已于次日完成，当前状态见 [Agent 与 Memory 正式接入验收](process-acceptance.md)。
+
 ## 中文名称更新
 
 2026-09-12 已上线中文名称：计数器示例、任务工作台示例、数据大屏，以及「智能体 → 智能体记忆」。桌面与手机列表、详情和父节点名称通过只读浏览器验收，控制台错误为 0，结果和截图在 `target/component-delivery/chinese-names/`。原有安装保持启用，大屏仍在可安装列表。

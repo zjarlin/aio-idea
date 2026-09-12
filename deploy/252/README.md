@@ -22,6 +22,8 @@ curl --fail https://aio.addzero.site/health
 
 ## 原生 v2 Process
 
+2026-09-13 的真实 Agent 与 Memory 发布版本、浏览器验证、数据库演练及模型条件见 [正式接入验收](process-acceptance.md)。
+
 Agent 使用原生 v2 整包中的 Linux ELF 与 Compose 前端，Pi SDK 依赖由预置 Node 镜像提供。宿主和监督器共同读取私有 `/opt/aio-idea/process.env`，以 `AIO_PROCESS_ROOT` 保存运行授权及 socket；加密主密钥仍由 Component keyring 管理。模型只能通过宿主 broker 访问清单及宿主共同批准的 HTTPS 基址，容器自身使用 `--network=none`。
 
 上线前运行 `component-storage.cjs backup` 和 `backup-components`，同时备份宿主数据库、插件数据库和宿主密钥目录。构建 Agent 仓库的 `Containerfile` 中 `runtime` 目标并核对不可变镜像 ID，然后设置 `AIO_PROCESS_IMAGE=sha256:...` 执行 `node deploy/252/component-storage.cjs processes`，登记预置镜像、模型地址和持久目录。模型未配置时仍接收加密资料，整理任务等待空间绑定模型。
