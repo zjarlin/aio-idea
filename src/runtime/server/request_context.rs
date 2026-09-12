@@ -151,9 +151,18 @@ pub(super) async fn catalog_value(
     catalog
         .account_items
         .retain(|item| permitted(item.required_permission.as_deref(), &session.permissions));
+    catalog.session_context = session_context(session);
+    catalog.context = tenant_context(session)?;
+    catalog
+        .page_versions
+        .retain(|id, _| catalog.pages.iter().any(|page| &page.id == id));
+    Ok(catalog)
+}
+
+pub(super) fn tenant_context(session: &SessionContext) -> anyhow::Result<String> {
     let mut permissions = session.permissions.clone();
     permissions.sort();
-    catalog.context = format!(
+    Ok(format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&(
             &session.session_id,
@@ -161,11 +170,14 @@ pub(super) async fn catalog_value(
             &session.tenant_id,
             permissions,
         ))?)
-    );
-    catalog
-        .page_versions
-        .retain(|id, _| catalog.pages.iter().any(|page| &page.id == id));
-    Ok(catalog)
+    ))
+}
+
+pub(super) fn session_context(session: &SessionContext) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!("{}\0{}", session.session_id, session.user_id))
+    )
 }
 
 pub(super) fn permitted(required_permission: Option<&str>, permissions: &[String]) -> bool {

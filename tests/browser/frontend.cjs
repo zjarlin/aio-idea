@@ -73,7 +73,17 @@ async function run(browser, mobile) {
     await page.getByRole("navigation", { name: "场景" }).getByRole("button", { name: "社区插件", exact: true }).click();
     await frame.getByText(`计数：${counter.count}`, { exact: true }).waitFor();
     assert.equal(await page.locator('iframe[title="Dioxus 全栈计数器"]').getAttribute("src"), src);
-    return { viewport: mobile ? "mobile" : "desktop", realDioxus: true, ...counter, tenant, isolation, retained: true };
+    const downloads = [];
+    page.on('request', request => {
+      const url = new URL(request.url());
+      if (url.pathname.includes('/frontend/assets/') && /\.(wasm|m?js)$/.test(url.pathname) && !url.pathname.includes('/__aio_')) downloads.push(url.pathname);
+    });
+    await page.reload();
+    await page.getByRole('navigation', { name: '场景' }).getByRole('button', { name: '社区插件', exact: true }).click();
+    await frame.getByText('计数：0', { exact: true }).waitFor({ timeout: 60000 });
+    assert.deepEqual(downloads, [], '刷新只能重建 UI，不能重复下载相同的插件 JS/Wasm');
+    assert.deepEqual(errors, []);
+    return { viewport: mobile ? "mobile" : "desktop", realDioxus: true, ...counter, tenant, isolation, retained: true, reloadPluginDownloads: downloads.length };
   } catch (error) {
     console.error("宿主页面:", await page.locator("body").innerText());
     console.error("控制台:", errors);

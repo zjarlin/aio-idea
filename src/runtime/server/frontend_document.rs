@@ -2,6 +2,8 @@ use anyhow::{Context as _, Result, ensure};
 use kuchikiki::traits::TendrilSink as _;
 
 pub(super) const BRIDGE_PATH: &str = "__aio_bridge.js";
+pub(super) const MODULES_PATH: &str = "__aio_modules.js";
+pub(super) const MODULES: &[u8] = include_bytes!("vendor/es-module-shims.js");
 
 pub(super) fn render_entry(html: &[u8], prefix: &str, entry: &str, token: &str) -> Result<Vec<u8>> {
     let html = std::str::from_utf8(html).context("前端入口不是 UTF-8")?;
@@ -9,6 +11,18 @@ pub(super) fn render_entry(html: &[u8], prefix: &str, entry: &str, token: &str) 
     let head = document
         .select_first("head")
         .map_err(|_| anyhow::anyhow!("前端入口缺少 head"))?;
+    for script in document
+        .select("script[type='module'], script[type='importmap']")
+        .map_err(|_| anyhow::anyhow!("解析模块入口失败"))?
+    {
+        let mut attributes = script.attributes.borrow_mut();
+        let kind = if attributes.get("type") == Some("module") {
+            "module-shim"
+        } else {
+            "importmap-shim"
+        };
+        attributes.insert("type", kind.to_owned());
+    }
     for node in document
         .select("base")
         .map_err(|_| anyhow::anyhow!("解析入口 base 失败"))?
@@ -42,6 +56,19 @@ pub(super) fn render_entry(html: &[u8], prefix: &str, entry: &str, token: &str) 
         .insert("data-token", token.to_owned());
     let script_node = script.as_node().clone();
     script_node.detach();
+    let loader = kuchikiki::parse_html()
+        .one("<head><script></script></head>")
+        .document_node;
+    let loader = loader
+        .select_first("script")
+        .map_err(|_| anyhow::anyhow!("创建模块加载器失败"))?;
+    loader
+        .attributes
+        .borrow_mut()
+        .insert("src", format!("{prefix}{MODULES_PATH}"));
+    let loader = loader.as_node().clone();
+    loader.detach();
+    head.as_node().prepend(loader);
     head.as_node().prepend(script_node);
     let base_node = base.as_node().clone();
     base_node.detach();
@@ -59,7 +86,7 @@ pub(super) fn render_entry(html: &[u8], prefix: &str, entry: &str, token: &str) 
 
 pub(super) fn content_policy(prefix: &str) -> String {
     format!(
-        "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' {prefix}; connect-src {prefix}; style-src 'unsafe-inline' {prefix}; img-src data: blob: {prefix}; font-src data: {prefix}; frame-src 'none'; object-src 'none'; worker-src 'none'; form-action 'none'; base-uri {prefix}; frame-ancestors 'self'"
+        "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: {prefix}; connect-src blob: {prefix}; style-src 'unsafe-inline' blob: {prefix}; img-src data: blob: {prefix}; font-src data: {prefix}; frame-src 'none'; object-src 'none'; worker-src 'none'; form-action 'none'; base-uri {prefix}; frame-ancestors 'self'"
     )
 }
 

@@ -39,6 +39,9 @@ pub(super) async fn mount(
         return Err(RuntimeError::forbidden("活动页面来源已变化，请重试挂载"));
     }
     let entry = frontend_entry(&binding)?.to_owned();
+    let session_context = super::request_context::session_context(&session);
+    let context = super::request_context::tenant_context(&session)?;
+    let generation = binding.activation_generation.clone();
     let package =
         super::frontend_package::prepare(&state, &binding.service.revision, &entry).await?;
     let grant = FrontendGrant {
@@ -64,6 +67,10 @@ pub(super) async fn mount(
             src: format!("/api/runtime/frontend/assets/{token}/{entry}"),
             token,
             revision: binding.service.revision,
+            generation,
+            session_context,
+            context,
+            assets: package.assets.clone(),
         },
     }))
 }
@@ -73,7 +80,7 @@ pub(super) async fn asset(
     request_headers: HeaderMap,
     Path((token, path)): Path<(String, String)>,
 ) -> Result<Response, RuntimeError> {
-    if path != frontend_document::BRIDGE_PATH {
+    if path != frontend_document::BRIDGE_PATH && path != frontend_document::MODULES_PATH {
         validate_frontend_path(&path)?;
     }
     let _slot = request_slot(&state)?;
@@ -92,6 +99,11 @@ pub(super) async fn asset(
     let (mut bytes, content_type) = if path == frontend_document::BRIDGE_PATH {
         (
             frontend_document::BRIDGE.as_bytes().to_vec(),
+            "application/javascript".to_owned(),
+        )
+    } else if path == frontend_document::MODULES_PATH {
+        (
+            frontend_document::MODULES.to_vec(),
             "application/javascript".to_owned(),
         )
     } else {

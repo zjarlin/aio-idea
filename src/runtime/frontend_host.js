@@ -6,12 +6,17 @@ if (assetURL.origin !== window.location.origin || !assetURL.pathname.startsWith(
   throw new Error("插件资产地址无效");
 }
 const requests = new Map();
+const asset = createFrontendAssetCache(config);
 let disposed = false;
 let renewing = false;
+let ticket = config.token;
+let epoch = 0;
+let restoring = null;
 const page = frame.closest("[data-aio-page-active]");
+const workspaceActive = () => !page || page.dataset.aioWorkspaceActive !== 'false';
 const visible = () => !document.hidden && (!page || page.dataset.aioPageActive === "true");
-const reply = (message) => {
-  if (!disposed) frame.contentWindow?.postMessage({ channel: "aio-plugin", token: config.token, ...message }, "*");
+const reply = (message, transfer = []) => {
+  if (!disposed) frame.contentWindow?.postMessage({ channel: "aio-plugin", token: config.token, ...message }, "*", transfer);
 };
 const receive = async (event) => {
   const message = event.data;
@@ -19,25 +24,39 @@ const receive = async (event) => {
       message.channel !== "aio-plugin" || message.token !== config.token ||
       typeof message.id !== "string" || !/^[0-9]{1,16}$/.test(message.id)) return;
   if (requests.has(message.id)) return;
+  if (!workspaceActive()) return reply({ id: message.id, error: '租户页面已暂停' });
   if (requests.size >= 16) return reply({ id: message.id, error: "插件请求超过并发配额" });
   let body;
   try {
-    body = JSON.stringify(message.request);
-    if (!body || body.length > 1048576) throw new Error("插件请求体过大");
+    if (typeof message.asset !== 'string') {
+      body = JSON.stringify(message.request);
+      if (!body || body.length > 1048576) throw new Error("插件请求体过大");
+    }
   } catch (error) {
     return reply({ id: message.id, error: error.message });
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25000);
   requests.set(message.id, controller);
+  const generation = epoch;
   try {
-    const response = await fetch(`/api/runtime/frontend/${config.token}/request`, {
+    if (restoring) await restoring;
+    if (!ticket || disposed || !workspaceActive() || generation !== epoch) throw new Error('租户页面已暂停');
+    if (typeof message.asset === 'string') {
+      const output = await asset(message.asset, ticket, controller.signal);
+      if (generation === epoch && !controller.signal.aborted && workspaceActive()) {
+        const bytes = output.bytes.slice(0);
+        reply({ id: message.id, asset: { bytes, type: output.type } }, [bytes]);
+      }
+      return;
+    }
+    const response = await fetch(`/api/runtime/frontend/${ticket}/request`, {
       method: "POST", credentials: "same-origin", redirect: "error",
       headers: { "content-type": "application/json" }, body, signal: controller.signal,
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    reply({ id: message.id, response: payload.data });
+    if (generation === epoch && workspaceActive()) reply({ id: message.id, response: payload.data });
   } catch (error) {
     reply({ id: message.id, error: error.message });
   } finally {
@@ -49,9 +68,49 @@ window.addEventListener("message", receive);
 const visibility = () => {
   reply({ lifecycle: "visibility", visible: visible() });
 };
-const revoke = () => fetch(`/api/runtime/frontend/${config.token}`, {
+const revoke = token => token && fetch(`/api/runtime/frontend/${token}`, {
   method: "DELETE", credentials: "same-origin", keepalive: true, redirect: "error",
 }).catch(() => {});
+const suspend = () => {
+  epoch++;
+  for (const [id, controller] of requests) {
+    controller.abort();
+    reply({ id, error: '租户页面已暂停' });
+  }
+  requests.clear();
+  const previous = ticket;
+  ticket = null;
+  void revoke(previous);
+};
+const restore = () => {
+  if (ticket || restoring || disposed || !workspaceActive()) return;
+  const generation = epoch;
+  restoring = (async () => {
+    const response = await fetch('/api/runtime/frontend/mount', {
+      method: 'POST', credentials: 'same-origin', redirect: 'error',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ page_id: config.page_id }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '恢复租户页面失败');
+    const mount = result.data;
+    if (disposed || !workspaceActive() || generation !== epoch) { void revoke(mount.token); return; }
+    if (mount.revision !== config.revision || mount.generation !== config.generation || mount.session_context !== config.session_context || mount.context !== config.context) {
+      void revoke(mount.token);
+      throw new Error('插件版本或登录上下文已变化');
+    }
+    ticket = mount.token;
+    visibility();
+  })().catch(error => {
+    if (!disposed && workspaceActive() && generation === epoch) {
+      dioxus.send({ error: error.message });
+      window.dispatchEvent(new Event('aio:catalog-invalidated'));
+    }
+  }).finally(() => {
+    restoring = null;
+    if (generation !== epoch && !ticket && workspaceActive() && !disposed) restore();
+  });
+};
 const cleanup = () => {
   if (disposed) return;
   disposed = true;
@@ -62,22 +121,21 @@ const cleanup = () => {
   window.removeEventListener("pageshow", activity);
   window.removeEventListener("message", receive);
   frame.removeEventListener("load", visibility);
-  for (const controller of requests.values()) controller.abort();
-  requests.clear();
+  suspend();
   frame.removeAttribute("src");
-  revoke();
 };
 const renew = async () => {
-  if (disposed || renewing) return;
+  if (disposed || renewing || !ticket || !workspaceActive()) return;
   renewing = true;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
+  const generation = epoch;
   requests.set("lease", controller);
   try {
-    const response = await fetch(`/api/runtime/frontend/${config.token}/renew`, {
+    const response = await fetch(`/api/runtime/frontend/${ticket}/renew`, {
       method: "POST", credentials: "same-origin", redirect: "error", signal: controller.signal,
     });
-    if ([401, 403, 404].includes(response.status) && !disposed) {
+    if ([401, 403, 404].includes(response.status) && !disposed && generation === epoch && workspaceActive()) {
       cleanup();
       dioxus.send({ error: "插件挂载已失效，请重新打开页面" });
       window.dispatchEvent(new Event("aio:catalog-invalidated"));
@@ -90,16 +148,26 @@ const renew = async () => {
     renewing = false;
   }
 };
-const activity = () => { visibility(); if (visible()) void renew(); };
+const activity = () => {
+  visibility();
+  if (!workspaceActive()) { if (ticket || requests.size) suspend(); return; }
+  restore();
+  if (visible()) void renew();
+};
 const leave = event => { if (!event.persisted) cleanup(); };
 const observer = new MutationObserver(activity);
-if (page) observer.observe(page, { attributes: true, attributeFilter: ["data-aio-page-active"] });
+if (page) observer.observe(page, { attributes: true, attributeFilter: ["data-aio-page-active", "data-aio-workspace-active"] });
 document.addEventListener("visibilitychange", activity);
 window.addEventListener("pagehide", leave);
 window.addEventListener("pageshow", activity);
 frame.addEventListener("load", visibility);
 const heartbeat = setInterval(renew, 60000);
-frame.src = assetURL.href;
+if ((page && page.dataset.aioWorkspaceContext !== config.context) || !workspaceActive()) {
+  cleanup();
+  dioxus.send({ error: '挂载期间租户或权限已变化，请重新打开页面' });
+} else {
+  frame.src = assetURL.href;
+}
 try {
   await dioxus.recv();
 } finally {

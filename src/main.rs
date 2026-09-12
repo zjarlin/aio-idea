@@ -37,12 +37,27 @@ fn App() -> dioxus::prelude::Element {
     use dioxus::prelude::*;
 
     let mut application = use_resource(|| async {
-        let session = aio_plugin_identity_client::load_session().await?;
-        let catalog = match session.as_ref() {
-            Some(_) => Some(runtime::client::catalog().await?),
-            None => None,
-        };
-        Ok::<_, String>((session, catalog))
+        for _ in 0..2 {
+            let session = aio_plugin_identity_client::load_session().await?;
+            let catalog = match session.as_ref() {
+                Some(_) => Some(runtime::client::catalog().await?),
+                None => None,
+            };
+            if let (Some(session), Some(catalog)) = (&session, &catalog)
+                && session.tenant_id != catalog.tenant.id
+            {
+                continue;
+            }
+            return Ok((session, catalog));
+        }
+        Err::<_, String>("租户正在切换，请重试".to_owned())
+    });
+    use_effect(move || {
+        if matches!(application.read().as_ref(), Some(Ok((None, _)))) {
+            spawn(async {
+                let _ = document::eval("if (typeof caches !== 'undefined') { await Promise.all((await caches.keys()).filter(name => name.startsWith('aio-plugin-assets-v1-')).map(name => caches.delete(name))); } return true;").await;
+            });
+        }
     });
     use_future(move || async move {
         loop {
@@ -132,7 +147,7 @@ fn App() -> dioxus::prelude::Element {
         })
         .collect::<Vec<_>>();
     rsx! {
-        for context in [catalog.context] {
+        for context in [catalog.session_context] {
           PluginApplication {
             key: "{context}",
             application_label: "AIO IDEA",
@@ -140,6 +155,8 @@ fn App() -> dioxus::prelude::Element {
             account_items: account_items.clone(),
             runtime_pages: runtime_pages.clone(),
             runtime_page_versions: catalog.page_versions.clone(),
+            workspace_id: catalog.tenant.id.clone(),
+            workspace_context: catalog.context.clone(),
             render_runtime_page: runtime::client::render_page,
             on_account_action: runtime::client::account_action,
             user: ApplicationUser {

@@ -83,12 +83,17 @@ fn document_bootstrap_replaces_base_and_stays_in_sandbox() -> anyhow::Result<()>
     assert_eq!(rendered.matches("<base").count(), 1);
     assert!(rendered.contains(&format!("href=\"{prefix}\"")));
     assert!(rendered.contains("__aio_bridge.js"));
+    assert!(rendered.contains("__aio_modules.js"));
+    assert!(rendered.contains("type=\"module-shim\""));
     assert!(!rendered.contains("evil.example"));
     let policy = frontend_document::content_policy(prefix);
     assert!(policy.contains("sandbox allow-scripts;"));
     assert!(policy.contains("script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'"));
     assert!(!policy.contains("allow-same-origin"));
-    assert!(policy.contains("connect-src https://aio.example/api/runtime/frontend/assets/token/;"));
+    assert!(
+        policy
+            .contains("connect-src blob: https://aio.example/api/runtime/frontend/assets/token/;")
+    );
     assert!(FrontendAccess::new("https://aio.example/path").is_err());
     assert!(FrontendAccess::new("http://public.example").is_err());
     let nested = String::from_utf8(frontend_document::render_entry(

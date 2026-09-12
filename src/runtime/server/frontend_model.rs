@@ -11,6 +11,10 @@ pub(super) struct MountResponse {
     pub token: String,
     pub src: String,
     pub revision: String,
+    pub generation: String,
+    pub session_context: String,
+    pub context: String,
+    pub assets: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]

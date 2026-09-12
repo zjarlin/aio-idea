@@ -246,6 +246,7 @@ impl PluginStore {
         }
         ensure_unique_pages(&pages)?;
         Ok(RuntimeCatalog {
+            session_context: String::new(),
             context: String::new(),
             page_versions,
             tenant: TenantView {

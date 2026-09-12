@@ -91,6 +91,19 @@ async fn exercise(state: &RuntimeState, base: &str) -> Result<()> {
     let first = fixture(&git, "1.0.0", &manifest, &pages, b"<!doctype html><html><head></head><body>first<script src='assets/app.js'></script></body></html>")?;
     activate(state, &session.tenant_id, &page_id, &first).await?;
     let mounted = mount(&client, base, &cookie, &page_id).await?;
+    assert_eq!(
+        mounted["data"]["session_context"],
+        super::request_context::session_context(&session)
+    );
+    assert_eq!(
+        mounted["data"]["context"],
+        super::request_context::tenant_context(&session)?
+    );
+    assert!(
+        mounted["data"]["assets"]["assets/app.js"]
+            .as_str()
+            .is_some_and(|digest| digest.len() == 64)
+    );
     let src = mounted["data"]["src"].as_str().context("缺少 src")?;
     let token = mounted["data"]["token"].as_str().context("缺少 token")?;
     let response = client

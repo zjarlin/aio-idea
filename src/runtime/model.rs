@@ -15,6 +15,7 @@ pub struct PageActionRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeCatalog {
+    pub session_context: String,
     pub context: String,
     pub page_versions: std::collections::BTreeMap<String, String>,
     pub tenant: TenantView,
