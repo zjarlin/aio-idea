@@ -11,6 +11,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+pub(super) fn permission(source: impl std::fmt::Display, name: &str) -> String {
+    format!("component:{source}:{name}")
+}
+
 #[derive(Default)]
 pub(super) struct Services {
     requests: Mutex<HashMap<String, (RequestContext, Vec<String>)>>,
@@ -57,10 +61,42 @@ impl HostServices for Services {
         Ok(requests
             .get(&scope.context.request_id)
             .is_some_and(|(context, permissions)| {
-                context == &scope.context && permissions.iter().any(|p| p == permission || p == "*")
+                let required = self::permission(&scope.source_id, permission);
+                context == &scope.context && permissions.iter().any(|p| p == &required || p == "*")
             }))
     }
     async fn manage(&self, _: &InvocationScope, _: Request) -> Result<Response> {
         bail!("当前执行器未授予管理接口")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn permissions_cannot_cross_plugin_or_host_boundaries() -> Result<()> {
+        let services = Services::default();
+        let context = RequestContext {
+            request_id: "request".into(),
+            ..Default::default()
+        };
+        services.requests.lock().unwrap().insert(
+            context.request_id.clone(),
+            (
+                context.clone(),
+                vec![permission("first", "plugin:manage"), "host:read".into()],
+            ),
+        );
+        let mut scope = InvocationScope {
+            source_id: "first".into(),
+            revision: "revision".into(),
+            context,
+            grants: Default::default(),
+        };
+        assert!(services.authorize(&scope, "plugin:manage").await?);
+        assert!(!services.authorize(&scope, "host:read").await?);
+        scope.source_id = "second".into();
+        assert!(!services.authorize(&scope, "plugin:manage").await?);
+        Ok(())
     }
 }

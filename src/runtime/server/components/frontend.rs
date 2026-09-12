@@ -42,8 +42,12 @@ async fn page(
         .into_iter()
         .find(|p| p.id == id)
         .context("插件未声明该页面")?;
+    let permission = page
+        .permission
+        .as_deref()
+        .map(|p| super::services::permission(source, p));
     ensure!(
-        permitted(page.permission.as_deref(), &session.permissions),
+        permitted(permission.as_deref(), &session.permissions),
         "当前用户无页面访问权限"
     );
     Ok((source, digest, generation, page))

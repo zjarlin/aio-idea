@@ -172,7 +172,14 @@ impl Components {
         let grants = bundle.verify()?.manifest().plugin.capabilities.clone();
         let slot = self.slot(source, tenant).await?;
         let previous = slot.stored().await?;
-        let permissions = bundle.verify()?.manifest().plugin.permissions.clone();
+        let permissions: Vec<_> = bundle
+            .verify()?
+            .manifest()
+            .plugin
+            .permissions
+            .iter()
+            .map(|name| services::permission(source, name))
+            .collect();
         slot.activate(&self.engine, bundle.clone(), grants, resources)
             .await?;
         let result=async {

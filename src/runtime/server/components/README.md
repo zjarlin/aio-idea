@@ -5,3 +5,5 @@
 `AIO_COMPONENT_DATABASE_URL` 指向具有创建隔离角色权限的专用 PostgreSQL，数据库必须撤销 PUBLIC 权限。`AIO_COMPONENT_HOME` 是发布目录之外的持久目录，保存 0600 的 `keyring.json` 和 `objects/`；未配置数据库时不开启原生 Component 安装。
 
 安装记录是版本激活的提交点。安装失败恢复上一执行槽，重启时按安装记录恢复执行槽；停用和卸载保留业务 schema、对象及版本历史。声明的业务权限只授予同租户已持有 `plugin:manage` 的角色。
+
+持久权限使用 `component:<source-id>:<permission>`，组件内仍调用原始权限名，宿主按当前执行来源映射。不同插件声明同名权限不会互相授权，也不能覆盖宿主权限。

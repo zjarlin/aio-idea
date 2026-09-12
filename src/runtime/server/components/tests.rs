@@ -42,6 +42,7 @@ async fn published_components_install_optionally_and_restore() -> Result<()> {
     sqlx::raw_sql("CREATE TABLE IF NOT EXISTS role_permissions(tenant_id TEXT,role_id TEXT,permission TEXT,PRIMARY KEY(tenant_id,role_id,permission)); CREATE TABLE IF NOT EXISTS plugin_sources(id TEXT PRIMARY KEY,git TEXT); CREATE TABLE IF NOT EXISTS tenant_plugin_bindings(tenant_id TEXT,source_id TEXT,enabled BOOLEAN);").execute(&pool).await?;
     let temp = tempfile::tempdir()?;
     let tenant = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO role_permissions(tenant_id,role_id,permission) VALUES($1,'manager','plugin:manage')").bind(&tenant).execute(&pool).await?;
     let git = format!("https://github.com/example/parent-{tenant}.git");
     let child_git = format!("https://github.com/example/child-{tenant}.git");
     let first = package(&temp.path().join("parent"), &git, None, "1.0.0")?;
@@ -64,6 +65,13 @@ async fn published_components_install_optionally_and_restore() -> Result<()> {
     );
     assert!(components.install(&tenant, &child_git, None).await.is_err());
     components.install(&tenant, &git, None).await?;
+    let grants: Vec<String> =
+        sqlx::query_scalar("SELECT permission FROM role_permissions WHERE tenant_id=$1")
+            .bind(&tenant)
+            .fetch_all(&pool)
+            .await?;
+    assert!(grants.contains(&services::permission(parent, "fixture.view")));
+    assert!(!grants.contains(&"fixture.view".to_owned()));
     assert!(
         !components
             .entries(&tenant)

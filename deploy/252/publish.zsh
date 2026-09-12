@@ -53,7 +53,7 @@ cargo zigbuild --release --target "$target" --no-default-features --features ser
 print "构建 Web 资产"
 dx build --platform web --release --debug-symbols false
 npm ci --prefix deploy --ignore-scripts --no-audit --no-fund
-node deploy/prepare-web.cjs
+node deploy/prepare-web.cjs "$CARGO_TARGET_DIR/dx/aio-idea/release/web/public"
 
 readonly release="$artifact/release"
 mkdir -p "$release"

@@ -76,6 +76,10 @@ impl Components {
             let generation: String = row.try_get("generation")?;
             for p in description.pages {
                 let id = format!("component:{source}:{}", p.id);
+                let permission = p
+                    .permission
+                    .as_deref()
+                    .map(|p| super::services::permission(source, p));
                 let (scene_id, scene_label) =
                     p.scene.unwrap_or_else(|| ("account".into(), "账户".into()));
                 catalog
@@ -87,7 +91,7 @@ impl Components {
                         label: p.label.clone(),
                         icon: None,
                         page_id: id.clone(),
-                        required_permission: p.permission.clone(),
+                        required_permission: permission.clone(),
                     });
                 }
                 catalog.pages.push(PageDefinition {
@@ -108,7 +112,7 @@ impl Components {
                             icon: None,
                         })
                         .collect(),
-                    required_permission: p.permission,
+                    required_permission: permission,
                     body: PageBody::Frontend { entry: p.entry },
                 });
             }
