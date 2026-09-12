@@ -1,7 +1,7 @@
-const { readFile } = require('node:fs/promises');
+const { readFile, writeFile } = require('node:fs/promises');
 const {chromium}=require('playwright');
 
-const launchBrowser=()=>chromium.launch({channel:'chrome',headless:true,args:['--disable-quic',...(process.env.AIO_BROWSER_HTTP1==='1'?['--disable-http2']:[])]});
+const launchBrowser=()=>chromium.launch({channel:'chrome',headless:true,args:['--disable-quic',...(process.env.AIO_BROWSER_HTTP1==='1'?['--disable-http2']:[])],...(process.env.AIO_BROWSER_PROXY?{proxy:{server:process.env.AIO_BROWSER_PROXY}}:{})});
 const grants=new WeakMap();
 
 async function contextFor(browser,base,mobile) {
@@ -52,4 +52,11 @@ async function getJson(context,url) {
   }
   throw new Error(`Read failed: ${new URL(url).pathname}`);
 }
-module.exports={contextFor,select,marketplace,getJson,launchBrowser,closeContext,closeBrowser};
+async function viewportScreenshot(page, path) {
+  const session = await page.context().newCDPSession(page);
+  try {
+    const {data} = await session.send('Page.captureScreenshot', {format: 'png', captureBeyondViewport: false});
+    await writeFile(path, Buffer.from(data, 'base64'));
+  } finally {await session.detach();}
+}
+module.exports={contextFor,select,marketplace,getJson,launchBrowser,closeContext,closeBrowser,viewportScreenshot};

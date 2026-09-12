@@ -4,6 +4,8 @@
 
 `startup-live.cjs` 使用 `AIO_URL` 和 `AIO_COOKIE_FILE` 测量公网桌面/移动端冷启动及缓存重载，保存 API Server-Timing、资源体积、加载时序和截图到 `AIO_PERFORMANCE_OUTPUT`。不输出 Cookie。
 
+`startup-smoke-live.cjs` 通过公网壳验证 KMP Counter1 的真实 canvas 计数、304 后保留 iframe 和市场 README 图片。只增加当前浏览器内的计数，退出时释放本次挂载。首次 Compose 资源下载允许 120 秒。公网截图使用浏览器合成帧，记录当时实际画面，不等待字体网络请求全部结束。
+
 `verify-delivery-evidence.cjs` 对公网浏览器报告与数据库快照交叉校验，断言三种首次 push 到真实后端调用不超过 60 分钟、激活后 60 秒内开始重新挂载、源码 SHA 一致以及更新期间没有整页导航。
 
 `cleanup-delivery-live.cjs` 通过正式卸载接口清理六个精确命名的临时插件，保留其他安装；数据库清理后以 `verify` 参数再次验证市场中已不存在临时来源。
