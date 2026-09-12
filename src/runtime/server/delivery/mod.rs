@@ -2,9 +2,13 @@ mod controller;
 mod discovery;
 mod documents;
 mod rollout;
+#[cfg(test)]
+mod rollout_tests;
 mod store;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(super) use rollout_tests::exercise_rollouts;
 
 pub(super) use controller::router;
 pub(super) use store::migrate;

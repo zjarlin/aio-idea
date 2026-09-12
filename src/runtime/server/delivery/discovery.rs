@@ -201,37 +201,51 @@ pub(super) async fn run(state: RuntimeState) {
 
 async fn discover(state: &RuntimeState, client: &Client, owner: &str) {
     let mut etags = std::collections::HashMap::new();
+    let mut interval = tokio::time::interval(Duration::from_secs(300));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        interval.tick().await;
         if let Err(error) = scan(state, client, owner, &mut etags).await {
             eprintln!("扫描插件仓库失败: {error:#}");
         }
-        tokio::time::sleep(Duration::from_secs(300)).await;
     }
 }
 
 async fn poll(state: &RuntimeState, client: &Client) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        interval.tick().await;
         let result = async {
             let rows = sqlx::query("SELECT git,branch FROM delivery_sources WHERE enabled")
                 .fetch_all(&state.store.pool)
                 .await?;
+            let mut tasks = tokio::task::JoinSet::new();
             for row in rows {
                 let git: String = row.try_get("git")?;
                 let branch: String = row.try_get("branch")?;
                 let repo = git
                     .strip_prefix("https://github.com/")
                     .and_then(|s| s.strip_suffix(".git"))
-                    .context("交付来源必须属于 GitHub")?;
-                if let Err(error) = inspect(&state, &client, repo, &git, &branch).await {
-                    eprintln!("检查 {repo} 失败: {error:#}");
+                    .context("交付来源必须属于 GitHub")?
+                    .to_owned();
+                let state = state.clone();
+                let client = client.clone();
+                tasks.spawn(async move {
+                    if let Err(error) = inspect(&state, &client, &repo, &git, &branch).await {
+                        eprintln!("检查 {repo} 失败: {error:#}");
+                    }
+                });
+                if tasks.len() >= 8 {
+                    let _ = tasks.join_next().await;
                 }
             }
+            while tasks.join_next().await.is_some() {}
             Ok::<_, anyhow::Error>(())
         }
         .await;
         if let Err(error) = result {
             eprintln!("仓库发现: {error:#}");
         }
-        tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }

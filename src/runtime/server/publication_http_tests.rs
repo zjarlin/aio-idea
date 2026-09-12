@@ -19,7 +19,7 @@ const PAGES: &str = r#"[{"id":"binary-integration","label":"Binary Integration",
 const MANIFEST: &str = "[plugin.runtime]\nkind='page-definition'\nartifact='dist/pages.json'\n[plugin.marketplace]\ntitle='Binary Integration'\nsummary='Binary publication test'\nlicense='MIT'\ntags=['test']\n[[plugin.subplugins]]\nid='integration'\npages=['binary-integration']\n";
 
 #[tokio::test]
-#[ignore = "需要独立 AIO_TEST_DATABASE_URL、同值 AIO_DATABASE_URL、AIO_TEST_CLI 和测试启动账号"]
+#[ignore = "需要独立 AIO_TEST_DATABASE_URL、同值 AIO_DATABASE_URL、AIO_TEST_CLI、AIO_DELIVERY_TOKEN 和测试启动账号"]
 async fn binary_cli_publishes_downloads_recovers_and_rolls_back_over_http() -> Result<()> {
     let database = std::env::var("AIO_TEST_DATABASE_URL")?;
     ensure!(
@@ -287,6 +287,13 @@ async fn exercise_http(
             .context("缺少插件列表")?
             .is_empty()
     );
+    super::delivery::exercise_rollouts(
+        state,
+        base,
+        &manifest.replace(&page_id, &format!("delivery-{page_id}")),
+        &pages.replace(&page_id, &format!("delivery-{page_id}")),
+    )
+    .await?;
     Ok(())
 }
 

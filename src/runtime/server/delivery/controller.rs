@@ -15,6 +15,7 @@ use super::{documents, store};
 pub(in crate::runtime::server) fn router() -> Router<RuntimeState> {
     Router::new()
         .route("/api/internal/delivery/claim", post(claim))
+        .route("/api/internal/delivery/retained-jobs", post(retained_jobs))
         .route(
             "/api/internal/delivery/jobs/{id}/heartbeat",
             post(heartbeat),
@@ -60,6 +61,15 @@ async fn claim(
 ) -> Result<Json<Option<BuildJob>>, RuntimeError> {
     authorize(&headers)?;
     Ok(Json(store::claim(&state.store.pool).await?))
+}
+
+async fn retained_jobs(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<i64>>, RuntimeError> {
+    authorize(&headers)?;
+    Ok(Json(sqlx::query_scalar("SELECT j.id FROM delivery_jobs j JOIN delivery_sources s ON s.git=j.git AND s.desired_sha=j.source_revision WHERE s.enabled AND j.state IN ('queued','building','uploaded','publishing')")
+        .fetch_all(&state.store.pool).await?))
 }
 
 #[derive(Deserialize)]

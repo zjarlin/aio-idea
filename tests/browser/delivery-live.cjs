@@ -88,6 +88,12 @@ async function verify(item){
   const browser=await chromium.launch({channel:'chrome',headless:true});
   try {
     const items=[await prepare(browser,false),await prepare(browser,true)];
+    const counts=items.map(item=>item.events.mounts.length);
+    await Promise.all(items.map(item=>item.page.waitForTimeout(61000)));
+    for(let i=0;i<items.length;i++){
+      assert.equal(items[i].events.mounts.length,counts[i], 'unchanged polling must not remount plugins');
+      assert.equal((await metadata(items[i].context)).entry.rev,items[i].initial.entry.rev);
+    }
     await writeFile(resolve(output,`${mode}-ready.json`),JSON.stringify({readyAt:Date.now(),initial:items[0].initial},null,2));
     console.log(`${mode}: desktop and mobile ready; awaiting real default-branch push`);
     const report=await Promise.all(items.map(verify));
