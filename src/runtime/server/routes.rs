@@ -94,6 +94,7 @@ pub fn router(state: RuntimeState) -> Router {
             post(uninstall),
         )
         .merge(super::delivery::router())
+        .merge(super::components::router(state.clone()))
         .with_state(state)
 }
 
@@ -280,6 +281,18 @@ async fn enable(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
+    if let Some(components) = &state.components
+        && components.contains_source(&source_id).await?
+    {
+        components
+            .change(
+                &session.tenant_id,
+                uuid::Uuid::parse_str(&source_id).context("来源无效")?,
+                "enable",
+            )
+            .await?;
+        return catalog_for(&state, &session).await;
+    }
     state
         .store
         .bound_runtime(&session.tenant_id, &source_id)
@@ -347,6 +360,23 @@ async fn disable(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
+    if let Some(components) = &state.components {
+        if components.contains_source(&source_id).await? {
+            components
+                .change(
+                    &session.tenant_id,
+                    uuid::Uuid::parse_str(&source_id).context("来源无效")?,
+                    "disable",
+                )
+                .await?;
+            return catalog_for(&state, &session).await;
+        }
+        if let Ok(source) = uuid::Uuid::parse_str(&source_id) {
+            components
+                .require_no_children(&session.tenant_id, source)
+                .await?;
+        }
+    }
     let lifecycle_lock = state.activation_lock(&session.tenant_id, &source_id)?;
     let _lifecycle_guard = lifecycle_lock.lock().await;
     let previous = state
@@ -385,6 +415,23 @@ async fn uninstall(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
+    if let Some(components) = &state.components {
+        if components.contains_source(&source_id).await? {
+            components
+                .change(
+                    &session.tenant_id,
+                    uuid::Uuid::parse_str(&source_id).context("来源无效")?,
+                    "uninstall",
+                )
+                .await?;
+            return catalog_for(&state, &session).await;
+        }
+        if let Ok(source) = uuid::Uuid::parse_str(&source_id) {
+            components
+                .require_no_children(&session.tenant_id, source)
+                .await?;
+        }
+    }
     let lifecycle_lock = state.activation_lock(&session.tenant_id, &source_id)?;
     let _lifecycle_guard = lifecycle_lock.lock().await;
     let previous = state
@@ -419,6 +466,18 @@ async fn rollback(
     Path(source_id): Path<String>,
 ) -> Result<Json<RuntimeResponse<RuntimeCatalog>>, RuntimeError> {
     let session = authenticate_manager(&state, &headers).await?;
+    if let Some(components) = &state.components
+        && components.contains_source(&source_id).await?
+    {
+        components
+            .change(
+                &session.tenant_id,
+                uuid::Uuid::parse_str(&source_id).context("来源无效")?,
+                "rollback",
+            )
+            .await?;
+        return catalog_for(&state, &session).await;
+    }
     let lifecycle_lock = state.activation_lock(&session.tenant_id, &source_id)?;
     let _lifecycle_guard = lifecycle_lock.lock().await;
     let previous = state
@@ -517,7 +576,11 @@ async fn marketplace(
     state.sync_marketplace_sources(remote_sources.clone());
     let mut sources = vec![PUBLISHED_REGISTRY_SOURCE.to_owned()];
     sources.extend(remote_sources);
-    let mut entries = Vec::new();
+    let mut entries = if let Some(components) = &state.components {
+        components.entries(&session.tenant_id).await?
+    } else {
+        Vec::new()
+    };
     for source in sources {
         for mut entry in state.store.marketplace_entries(&source).await? {
             if let Some(plugin) = catalog
@@ -581,6 +644,7 @@ fn unlisted_entry(plugin: &crate::runtime::InstalledPluginView) -> MarketplaceEn
         .unwrap_or("Git plugin")
         .to_owned();
     MarketplaceEntry {
+        parent_git: None,
         git: plugin.git.clone(),
         rev: plugin.revision.clone(),
         title,

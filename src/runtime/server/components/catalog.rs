@@ -1,0 +1,118 @@
+use super::{Components, model::Description};
+use crate::runtime::{
+    CapabilityManifest, InstalledPluginView, MarketplaceEntry, PageBody, PageDefinition,
+    PluginRuntime, PluginState, RuntimeAccountItem, RuntimeCatalog,
+};
+use anyhow::Result;
+use az_plugin_manifest::{MenuGroupDefinition, SceneDefinition};
+use sqlx::Row;
+use uuid::Uuid;
+
+impl Components {
+    pub async fn entries(&self, tenant: &str) -> Result<Vec<MarketplaceEntry>> {
+        let rows=sqlx::query("SELECT s.id,s.git,s.parent_git,p.digest,v.metadata,v.capabilities,i.digest AS installed_revision,i.enabled FROM component_sources s JOIN component_publications p ON p.source_id=s.id JOIN component_versions v ON v.digest=p.digest LEFT JOIN component_installations i ON i.source_id=s.id AND i.tenant_id=$1 ORDER BY v.metadata->>'title'").bind(tenant).fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                let metadata: az_plugin_bundle::MarketplaceManifest =
+                    serde_json::from_value(row.try_get("metadata")?)?;
+                let active_revision: Option<String> = row.try_get("installed_revision")?;
+                Ok(MarketplaceEntry {
+                    git: row.try_get("git")?,
+                    rev: row.try_get("digest")?,
+                    title: metadata.title,
+                    summary: metadata.summary,
+                    license: metadata.license,
+                    tags: metadata.tags,
+                    installed: active_revision.is_some(),
+                    source_id: Some(row.try_get::<Uuid, _>("id")?.to_string()),
+                    state: active_revision.as_ref().map(|_| {
+                        if row.get::<Option<bool>, _>("enabled") == Some(true) {
+                            PluginState::Active
+                        } else {
+                            PluginState::Disabled
+                        }
+                    }),
+                    active_revision,
+                    runtime: Some(PluginRuntime::WasmComponent),
+                    capabilities: CapabilityManifest {
+                        database: row.try_get::<serde_json::Value, _>("capabilities")?["database"]
+                            .as_bool()
+                            .unwrap_or(false),
+                        ..Default::default()
+                    },
+                    parent_git: metadata.parent,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn append_catalog(&self, tenant: &str, catalog: &mut RuntimeCatalog) -> Result<()> {
+        let rows=sqlx::query("SELECT s.id,s.git,i.digest,i.enabled,i.generation::TEXT,v.description,v.capabilities FROM component_sources s JOIN component_installations i ON i.source_id=s.id JOIN component_versions v ON v.digest=i.digest WHERE i.tenant_id=$1").bind(tenant).fetch_all(&self.pool).await?;
+        for row in rows {
+            let source: Uuid = row.try_get("id")?;
+            let enabled: bool = row.try_get("enabled")?;
+            let digest: String = row.try_get("digest")?;
+            catalog.plugins.push(InstalledPluginView {
+                source_id: source.to_string(),
+                git: row.try_get("git")?,
+                revision: digest.clone(),
+                runtime: PluginRuntime::WasmComponent,
+                state: if enabled {
+                    PluginState::Active
+                } else {
+                    PluginState::Disabled
+                },
+                capabilities: CapabilityManifest {
+                    database: row.try_get::<serde_json::Value, _>("capabilities")?["database"]
+                        .as_bool()
+                        .unwrap_or(false),
+                    ..Default::default()
+                },
+            });
+            if !enabled {
+                continue;
+            }
+            let description: Description = serde_json::from_value(row.try_get("description")?)?;
+            let generation: String = row.try_get("generation")?;
+            for p in description.pages {
+                let id = format!("component:{source}:{}", p.id);
+                let (scene_id, scene_label) =
+                    p.scene.unwrap_or_else(|| ("account".into(), "账户".into()));
+                catalog
+                    .page_versions
+                    .insert(id.clone(), format!("{digest}:{generation}"));
+                if p.surface != "workspace" {
+                    catalog.account_items.push(RuntimeAccountItem {
+                        id: id.clone(),
+                        label: p.label.clone(),
+                        icon: None,
+                        page_id: id.clone(),
+                        required_permission: p.permission.clone(),
+                    });
+                }
+                catalog.pages.push(PageDefinition {
+                    id,
+                    label: p.label,
+                    icon: None,
+                    scene: SceneDefinition {
+                        id: scene_id,
+                        label: scene_label,
+                    },
+                    menu_path: p
+                        .menu_path
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, label)| MenuGroupDefinition {
+                            id: format!("component-{source}-{i}-{label}"),
+                            label,
+                            icon: None,
+                        })
+                        .collect(),
+                    required_permission: p.permission,
+                    body: PageBody::Frontend { entry: p.entry },
+                });
+            }
+        }
+        Ok(())
+    }
+}

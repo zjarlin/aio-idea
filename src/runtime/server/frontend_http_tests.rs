@@ -41,6 +41,7 @@ async fn frontend_http_mounts_verified_assets_and_revokes_live_access() -> Resul
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let base = format!("http://{}", listener.local_addr()?);
     let state = RuntimeState {
+        components: None,
         store,
         repository: Arc::new(RepositoryInstaller::new(temporary.path().join("cache"))),
         identity,

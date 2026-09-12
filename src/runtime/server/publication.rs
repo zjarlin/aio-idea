@@ -97,16 +97,32 @@ pub(super) async fn download_package(
     Path(revision): Path<String>,
 ) -> Result<Response, RuntimeError> {
     authenticate(&state, &headers).await?;
-    let archive = state
-        .store
-        .downloadable_package(&revision)
-        .await?
-        .ok_or_else(|| RuntimeError::not_found("插件包不存在或尚未通过发布验证"))?;
+    let native: Option<Vec<u8>> = if state.components.is_some() {
+        sqlx::query_scalar("SELECT archive FROM component_versions WHERE digest=$1")
+            .bind(&revision)
+            .fetch_optional(&state.store.pool)
+            .await?
+    } else {
+        None
+    };
+    let content_type = if native.is_some() {
+        "application/vnd.aio.component+gzip"
+    } else {
+        PACKAGE_CONTENT_TYPE
+    };
+    let archive = if let Some(archive) = native {
+        archive
+    } else {
+        state
+            .store
+            .downloadable_package(&revision)
+            .await?
+            .ok_or_else(|| RuntimeError::not_found("插件包不存在或尚未通过发布验证"))?
+    };
     let mut response = archive.into_response();
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static(PACKAGE_CONTENT_TYPE),
-    );
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     response.headers_mut().insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_str(&format!("attachment; filename=\"{revision}.aio-plugin\""))

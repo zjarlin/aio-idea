@@ -36,7 +36,11 @@ git -C "$repository" worktree add --detach "$workspace/source" "$revision"
 git -C "$workspace/source" submodule update --init --recursive
 
 cd "$workspace/source"
-export CARGO_TARGET_DIR="$workspace/source/target"
+export CARGO_TARGET_DIR="${AIO_DEPLOY_TARGET_DIR:-$workspace/source/target}"
+if [[ "$CARGO_TARGET_DIR" != /* ]]; then
+    print -u2 "AIO_DEPLOY_TARGET_DIR 必须是绝对路径"
+    exit 64
+fi
 
 print "验证服务端"
 cargo test --no-default-features --features server

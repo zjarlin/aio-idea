@@ -7,6 +7,7 @@ use crate::runtime::CapabilityManifest;
 
 fn published_entry(git: &str, revision: &str) -> MarketplaceEntry {
     MarketplaceEntry {
+        parent_git: None,
         git: git.to_owned(),
         rev: revision.to_owned(),
         title: "离线插件".to_owned(),

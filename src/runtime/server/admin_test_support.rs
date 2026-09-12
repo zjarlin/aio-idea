@@ -34,6 +34,7 @@ impl RuntimeState {
             frontend: Arc::new(FrontendAccess::new(origin)?),
             process: Arc::new(ProcessManager::new()?),
             wasm: Arc::new(WasmManager::new()?),
+            components: None,
         })
     }
 }

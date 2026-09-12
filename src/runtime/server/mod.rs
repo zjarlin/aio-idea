@@ -1,6 +1,7 @@
 mod activation_store;
 #[cfg(test)]
 mod admin_test_support;
+mod components;
 mod delivery;
 mod frontend_access;
 #[cfg(test)]
@@ -66,6 +67,7 @@ pub struct RuntimeState {
     frontend: Arc<frontend_access::FrontendAccess>,
     pub process: Arc<process::ProcessManager>,
     pub wasm: Arc<wasm::WasmManager>,
+    components: Option<Arc<components::Components>>,
 }
 
 impl RuntimeState {
@@ -85,15 +87,32 @@ impl RuntimeState {
         let cache_root = env::var_os("AIO_PLUGIN_CACHE")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(".aio/runtime"));
-        let repository = Arc::new(repository::RepositoryInstaller::new(cache_root));
+        let repository = Arc::new(repository::RepositoryInstaller::new(cache_root.clone()));
         let process = Arc::new(process::ProcessManager::new()?);
         let wasm = Arc::new(wasm::WasmManager::new()?);
+        let components = if let Ok(database) = env::var("AIO_COMPONENT_DATABASE_URL") {
+            let root = env::var_os("AIO_COMPONENT_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| cache_root.join("components"));
+            Some(Arc::new(
+                components::Components::open(
+                    store.pool.clone(),
+                    &database,
+                    &root.join("keyring.json"),
+                    root.join("objects"),
+                )
+                .await?,
+            ))
+        } else {
+            None
+        };
         let state = Self {
             store,
             repository,
             identity,
             process,
             wasm,
+            components,
             marketplace_syncing: Arc::new(Mutex::new(HashSet::new())),
             activation_locks: Arc::new(Mutex::new(HashMap::new())),
             publication_slots: Arc::new(tokio::sync::Semaphore::new(2)),
@@ -108,9 +127,18 @@ impl RuntimeState {
         state.ensure_default_plugins().await?;
         state.reconcile_wasm().await?;
         state.reconcile_processes().await?;
+        if let Some(components) = &state.components {
+            components.restore().await?;
+        }
         state.resume_published_jobs().await?;
         delivery::start(state.clone());
         Ok(state)
+    }
+
+    fn components(&self) -> Result<&components::Components> {
+        self.components
+            .as_deref()
+            .context("宿主尚未配置 Component 持久存储")
     }
 
     pub(super) fn activation_lock(
@@ -321,7 +349,13 @@ impl RuntimeState {
         for target in &targets {
             self.restore_package_cache(&target.revision).await?;
         }
-        self.process.health().await?;
+        if let Err(error) = self.process.health().await {
+            if !targets.is_empty() {
+                return Err(error.context("已安装 process 插件，需要可用的监督器"));
+            }
+            eprintln!("未启用 process 插件，监督器暂不可用: {error:#}");
+            return Ok(());
+        }
         self.process
             .reconcile(
                 targets

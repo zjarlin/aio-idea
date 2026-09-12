@@ -145,6 +145,11 @@ pub(super) async fn catalog_value(
             },
         )
         .await?;
+    if let Some(components) = &state.components {
+        components
+            .append_catalog(&session.tenant_id, &mut catalog)
+            .await?;
+    }
     catalog
         .pages
         .retain(|page| permitted(page.required_permission.as_deref(), &session.permissions));
