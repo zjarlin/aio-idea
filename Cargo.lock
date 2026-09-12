@@ -250,7 +250,7 @@ dependencies = [
 [[package]]
 name = "aio-plugin-marketplace-client"
 version = "0.1.0"
-source = "git+https://github.com/zjarlin/aio-plugin-marketplace.git?rev=9e30813ecf139b36fa352e34e9ba6e2796ea50f2#9e30813ecf139b36fa352e34e9ba6e2796ea50f2"
+source = "git+https://github.com/zjarlin/aio-plugin-marketplace.git?rev=5a9abb0ba9ea78b770101d2e0bf31c801fc0273d#5a9abb0ba9ea78b770101d2e0bf31c801fc0273d"
 dependencies = [
  "az-dioxus-admin-shell",
  "az-ui-components",
@@ -265,7 +265,7 @@ dependencies = [
 [[package]]
 name = "aio-plugin-marketplace-server"
 version = "0.1.0"
-source = "git+https://github.com/zjarlin/aio-plugin-marketplace.git?rev=9e30813ecf139b36fa352e34e9ba6e2796ea50f2#9e30813ecf139b36fa352e34e9ba6e2796ea50f2"
+source = "git+https://github.com/zjarlin/aio-plugin-marketplace.git?rev=5a9abb0ba9ea78b770101d2e0bf31c801fc0273d#5a9abb0ba9ea78b770101d2e0bf31c801fc0273d"
 dependencies = [
  "anyhow",
  "axum",
@@ -686,7 +686,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-bundle"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=cd6ba2336f6af21a7395af9c98c5f1a24bf5df1b#cd6ba2336f6af21a7395af9c98c5f1a24bf5df1b"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=c2d2714d69e22ffe6f09d12de690751f83a78dc7#c2d2714d69e22ffe6f09d12de690751f83a78dc7"
 dependencies = [
  "anyhow",
  "az-plugin-contract",
@@ -703,7 +703,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-contract"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=cd6ba2336f6af21a7395af9c98c5f1a24bf5df1b#cd6ba2336f6af21a7395af9c98c5f1a24bf5df1b"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=c2d2714d69e22ffe6f09d12de690751f83a78dc7#c2d2714d69e22ffe6f09d12de690751f83a78dc7"
 dependencies = [
  "serde",
  "serde_json",
@@ -753,7 +753,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-runtime"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=cd6ba2336f6af21a7395af9c98c5f1a24bf5df1b#cd6ba2336f6af21a7395af9c98c5f1a24bf5df1b"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=c2d2714d69e22ffe6f09d12de690751f83a78dc7#c2d2714d69e22ffe6f09d12de690751f83a78dc7"
 dependencies = [
  "aes-gcm",
  "anyhow",

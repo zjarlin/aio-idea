@@ -646,6 +646,7 @@ fn unlisted_entry(plugin: &crate::runtime::InstalledPluginView) -> MarketplaceEn
         .to_owned();
     MarketplaceEntry {
         parent_git: None,
+        parent_title: None,
         git: plugin.git.clone(),
         rev: plugin.revision.clone(),
         title,

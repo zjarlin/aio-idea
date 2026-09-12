@@ -21,14 +21,14 @@ async function run(browser,mobile){
       const before=Number(await handle.getAttribute('aria-valuenow'));await page.keyboard.press('ArrowRight');
       assert.equal(Number(await handle.getAttribute('aria-valuenow')),Math.min(420,before+10));
     }
-    await search.fill('KMP');await page.waitForFunction(()=>document.querySelectorAll('[role=treeitem]').length===1);
+    await search.fill('任务工作台');await page.waitForFunction(()=>document.querySelectorAll('[role=treeitem]').length===1);
     await page.getByRole('treeitem').click();await page.locator('.dx-markdown h1').waitFor();
-    assert.equal(await page.locator('.extension-browser__heading h1').innerText(),'KMP 全栈示例');
+    assert.equal(await page.locator('.extension-browser__heading h1').innerText(),'任务工作台示例');
     await page.waitForFunction(()=>{const image=document.querySelector('.dx-markdown img');return image?.complete&&image.naturalWidth>0;});
     assert(await page.locator('.extension-browser__detail').evaluate(element=>element.scrollWidth<=element.clientWidth),'detail content must fit its pane');
     await page.screenshot({path:resolve(output,`${mobile?'mobile':'desktop'}-marketplace-live.png`)});
     if(mobile){
-      await page.getByRole('button',{name:'插件列表',exact:true}).click();assert.equal(await search.inputValue(),'KMP');
+      await page.getByRole('button',{name:'插件列表',exact:true}).click();assert.equal(await search.inputValue(),'任务工作台');
       await page.getByRole('treeitem').click();await page.getByRole('tab',{name:'版本记录',exact:true}).click();
       await page.locator('.extension-browser__versions li').first().waitFor();
     }else{

@@ -50,6 +50,7 @@ fn builds_manageable_entry_for_unlisted_plugin() {
 fn preserves_market_metadata_until_an_installed_manifest_overrides_it() {
     let mut entry = MarketplaceEntry {
         parent_git: None,
+        parent_title: None,
         git: "https://github.com/example/plugin.git".to_owned(),
         rev: "1".repeat(40),
         title: "Plugin".to_owned(),

@@ -44,7 +44,7 @@ async function run(browser, cookie, mobile) {
     await page.locator(`[data-aio-workspace="${tenant_id}"][data-aio-workspace-active="true"]`).first().waitFor({ state: 'attached' });
   };
   const counter = async (tenant, value) => {
-    const frame = page.frameLocator(selector(tenant, 'KMP 全栈示例'));
+    const frame = page.frameLocator(selector(tenant, '任务工作台示例'));
     await frame.getByRole('button', { name: 'Counter', exact: true }).waitFor({ timeout: 180000 });
     await frame.getByRole('button', { name: 'Counter', exact: true }).click({ force: true });
     await frame.getByRole('button', { name: '+1', exact: true }).waitFor();
@@ -54,23 +54,23 @@ async function run(browser, cookie, mobile) {
   try {
     await page.goto(origin);
     await scene();
-    const rust = page.frameLocator(selector(original, 'Dioxus 全栈计数器'));
+    const rust = page.frameLocator(selector(original, '计数器示例'));
     await rust.getByRole('button', { name: '+1', exact: true }).waitFor({ timeout: 90000 });
     console.log(`${mobile ? 'mobile' : 'desktop'}: Dioxus loaded`);
     await rust.getByRole('button', { name: '+1', exact: true }).click();
-    await select('KMP 全栈示例');
+    await select('任务工作台示例');
     const frame = await counter(original, 0);
     console.log(`${mobile ? 'mobile' : 'desktop'}: Compose loaded`);
     await frame.getByRole('button', { name: '+1', exact: true }).click({ force: true });
     await frame.getByText('1', { exact: true }).waitFor();
     const marker = await frame.locator('body').evaluate(() => window.__tenantCacheProbe = Math.random());
-    const source = await page.locator(selector(original, 'KMP 全栈示例')).getAttribute('src');
+    const source = await page.locator(selector(original, '任务工作台示例')).getAttribute('src');
     const oldToken = source.match(/assets\/([^/]+)/)[1];
     await switchTo(other);
-    await page.locator(selector(original, 'KMP 全栈示例')).waitFor({ state: 'hidden' });
+    await page.locator(selector(original, '任务工作台示例')).waitFor({ state: 'hidden' });
     assert.match(await frame.locator('body').evaluate(() => window.aioPlugin.json('GET', '/tasks').catch(e => e.message)), /暂停/);
     await scene();
-    await select('KMP 全栈示例');
+    await select('任务工作台示例');
     const frameB = await counter(other, 0);
     await frameB.getByRole('button', { name: '+1', exact: true }).click({ force: true });
     await frameB.getByText('1', { exact: true }).waitFor();
@@ -79,7 +79,7 @@ async function run(browser, cookie, mobile) {
     await switchTo(original);
     await frame.getByText('1', { exact: true }).waitFor({ timeout: 1000 });
     const returnMs = performance.now() - start;
-    assert.equal(await page.locator(selector(original, 'KMP 全栈示例')).getAttribute('src'), source);
+    assert.equal(await page.locator(selector(original, '任务工作台示例')).getAttribute('src'), source);
     assert.equal(await frame.locator('body').evaluate(() => window.__tenantCacheProbe), marker);
     assert.equal(downloads.length, before, 'A return must not fetch assets');
     const stale = await context.request.post(origin + `/api/runtime/frontend/${oldToken}/renew`);
@@ -91,8 +91,8 @@ async function run(browser, cookie, mobile) {
     const reloaded = downloads.length;
     await page.reload();
     await scene();
-    await page.frameLocator(selector(original, 'Dioxus 全栈计数器')).getByRole('button', { name: '+1', exact: true }).waitFor({ timeout: 90000 });
-    await select('KMP 全栈示例');
+    await page.frameLocator(selector(original, '计数器示例')).getByRole('button', { name: '+1', exact: true }).waitFor({ timeout: 90000 });
+    await select('任务工作台示例');
     await counter(original, 0);
     const repeatedModules = downloads.slice(reloaded).filter(path => /\.(wasm|mjs|js)$/.test(path) && !/\/(__aio_|import-map-loader|startup)/.test(path));
     assert.deepEqual(repeatedModules, []);

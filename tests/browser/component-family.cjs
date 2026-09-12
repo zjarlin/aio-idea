@@ -25,24 +25,25 @@ async function run(){
       data:fs.readFileSync(path.join(repository,'dist/agent-memory-0.1.0.aio-plugin')),timeout:240000,
     });
     assert(response.ok(),`Publish ${response.status()}: ${await response.text()}`);
-    const published=(await response.json()).data;console.log('Published Agent Memory');
+    const published=(await response.json()).data;console.log('已发布智能体记忆');
     assert((await context.request.post(`${base}/api/runtime/components/${published.revision}/documentation`,{data:fs.readFileSync(path.join(repository,'README.md'),'utf8'),headers:{'content-type':'text/plain'}})).ok());
     const catalog=await context.request.get(`${base}/api/runtime/marketplace`);
     const entries=(await catalog.json()).data;
     const child=entries.find(e=>e.git===git),root=entries.find(e=>e.git===parent);
     assert.equal(child.parent_git,parent);assert(!child.installed);
+    assert.equal(child.title,'智能体记忆');assert.equal(child.parent_title,'智能体');
     let parentRequired=false;
     if(root?.state!=='active'){
       const denied=await context.request.post(`${base}/api/runtime/plugins/install`,{data:{git}});
       assert(!denied.ok(),'Child must require an enabled parent');parentRequired=true;
     }
     await page.goto(base);await page.locator('.application-shell:visible').waitFor();await marketplace(page,false);
-    await page.getByRole('textbox',{name:'搜索插件',exact:true}).fill('Agent');
-    const node=page.getByRole('treeitem').filter({hasText:'Agent Memory'});
+    await page.getByRole('textbox',{name:'搜索插件',exact:true}).fill('智能体');
+    const node=page.getByRole('treeitem').filter({hasText:'智能体记忆'});
     await node.click();assert.equal(await node.getAttribute('aria-level'),'2');
     await page.getByText('正在读取 README',{exact:true}).waitFor({state:'hidden'});
-    const toggle=page.getByRole('button',{name:/收起 .*agent/i});await toggle.click();assert.equal(await node.count(),0);
-    await page.getByRole('button',{name:/展开 .*agent/i}).click();await node.waitFor();
+    const toggle=page.getByRole('button',{name:'收起 智能体',exact:true});await toggle.click();assert.equal(await node.count(),0);
+    await page.getByRole('button',{name:'展开 智能体',exact:true}).click();await node.waitFor();
     if(!root)await page.getByText('父插件尚未发布',{exact:true}).first().waitFor();
     fs.mkdirSync(output,{recursive:true});await page.screenshot({path:path.join(output,'plugin-family.png')});
     assert.deepEqual(errors,[]);

@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 
 module.exports = async function verifyCounterState(page, context, tenant) {
-  const frame = page.frameLocator('iframe[title="Dioxus 全栈计数器"]');
+  const frame = page.frameLocator('iframe[title="计数器示例"]');
   const increment = frame.getByRole('button', { name: '+1', exact: true });
   const backend = frame.getByRole('button', { name: '请求后端 +1', exact: true });
   const requests = [];

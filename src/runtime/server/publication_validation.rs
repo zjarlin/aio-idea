@@ -66,6 +66,7 @@ impl RepositoryInstaller {
             .context("在线发布插件必须声明 [plugin.marketplace]")?;
         Ok(MarketplaceEntry {
             parent_git: None,
+            parent_title: None,
             git: git.to_owned(),
             rev: revision.to_owned(),
             title: metadata.title.clone(),

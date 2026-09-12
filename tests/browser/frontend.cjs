@@ -48,8 +48,8 @@ async function run(browser, mobile) {
     await page.getByRole("navigation", { name: "场景" }).getByRole("button", { name: "社区插件", exact: true }).click();
     if (mobile) await page.getByRole("button", { name: "打开菜单", exact: true }).click();
     const sidebar = mobile ? page.getByRole("dialog") : page.locator(".application-shell__sidebar");
-    await sidebar.getByRole("button", { name: "Dioxus 全栈计数器", exact: true }).click();
-    const frame = page.frameLocator('iframe[title="Dioxus 全栈计数器"]');
+    await sidebar.getByRole("button", { name: "计数器示例", exact: true }).click();
+    const frame = page.frameLocator('iframe[title="计数器示例"]');
     const counter = await verifyCounterState(page, context, tenant);
     assert.deepEqual(errors, [], "正常插件加载和调用不能产生控制台错误");
     const dimensions = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
@@ -74,7 +74,7 @@ async function run(browser, mobile) {
     assert.equal((await context.request.get(src)).status(), 200, "切换菜单不能销毁前端挂载");
     await page.getByRole("navigation", { name: "场景" }).getByRole("button", { name: "社区插件", exact: true }).click();
     await frame.getByText(`计数：${counter.count}`, { exact: true }).waitFor();
-    assert.equal(await page.locator('iframe[title="Dioxus 全栈计数器"]').getAttribute("src"), src);
+    assert.equal(await page.locator('iframe[title="计数器示例"]').getAttribute("src"), src);
     const downloads = [];
     page.on('request', request => {
       const url = new URL(request.url());
@@ -115,7 +115,7 @@ async function run(browser, mobile) {
     await page.locator('.application-shell__sidebar button[aria-label$="的账户菜单"]').click();
     await page.getByRole('menuitem', { name: '插件市场', exact: true }).click();
     await page.getByRole('searchbox', { name: '搜索插件', exact: true }).fill(git);
-    const title = 'Dioxus Fullstack Counter';
+    const title = '计数器示例';
     const row = page.getByRole('table', { name: '插件', exact: true }).getByRole('row').filter({ has: page.getByRole('button', { name: `停用 ${title}`, exact: true }) });
     const disabled = page.waitForResponse(response => response.url().endsWith('/disable'));
     await row.getByRole('button', { name: `停用 ${title}`, exact: true }).click();

@@ -41,6 +41,7 @@ impl Components {
                         ..Default::default()
                     },
                     parent_git: metadata.parent,
+                    parent_title: metadata.parent_title,
                 })
             })
             .collect()

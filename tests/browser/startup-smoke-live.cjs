@@ -18,9 +18,9 @@ async function run(browser, mobile) {
       return shell && getComputedStyle(shell).display === 'grid';
     }, null, {timeout: 60000});
     await page.getByRole('navigation', {name: '场景'}).getByRole('button', {name: '社区插件', exact: true}).click();
-    await select(page, mobile, 'KMP 全栈示例');
-    const iframe = page.locator('iframe[title="KMP 全栈示例"]');
-    const frame = page.frameLocator('iframe[title="KMP 全栈示例"]');
+    await select(page, mobile, '任务工作台示例');
+    const iframe = page.locator('iframe[title="任务工作台示例"]');
+    const frame = page.frameLocator('iframe[title="任务工作台示例"]');
     await frame.getByRole('button', {name: 'Counter', exact: true}).waitFor({timeout: 120000});
     await frame.getByRole('button', {name: 'Counter', exact: true}).click({force: true});
     await frame.getByText('KMP Counter1', {exact: true}).waitFor();
@@ -47,8 +47,8 @@ async function run(browser, mobile) {
     await frame.getByText('1', {exact: true}).waitFor();
     await viewportScreenshot(page, resolve(output, `${mobile ? 'mobile' : 'desktop'}-counter.png`));
     await marketplace(page, mobile);
-    await page.getByRole('textbox', {name: '搜索插件', exact: true}).fill('KMP');
-    await page.getByRole('treeitem').filter({hasText: 'KMP 全栈示例'}).click();
+    await page.getByRole('textbox', {name: '搜索插件', exact: true}).fill('任务工作台');
+    await page.getByRole('treeitem').filter({hasText: '任务工作台示例'}).click();
     await page.locator('.dx-markdown h1').waitFor({timeout: 60000});
     await page.waitForFunction(() => {
       const image = document.querySelector('.dx-markdown img');

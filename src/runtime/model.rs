@@ -128,6 +128,8 @@ pub struct PublishedPluginView {
 pub struct MarketplaceEntry {
     #[serde(default)]
     pub parent_git: Option<String>,
+    #[serde(default)]
+    pub parent_title: Option<String>,
     pub git: String,
     pub rev: String,
     pub title: String,

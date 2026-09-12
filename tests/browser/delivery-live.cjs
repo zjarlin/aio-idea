@@ -7,7 +7,7 @@ const base=process.env.AIO_URL||'https://aio.addzero.site';
 const output=resolve('target/delivery-test');
 const mode=process.env.AIO_DELIVERY_E2E_MODE||'counter';
 const git='https://github.com/zjarlin/aio-plugin-kmp-example.git';
-const otherPlugin=process.env.AIO_DELIVERY_OTHER_PLUGIN||'Dioxus 全栈计数器';
+const otherPlugin=process.env.AIO_DELIVERY_OTHER_PLUGIN||'计数器示例';
 
 async function metadata(context){
   const list=await getJson(context,`${base}/api/runtime/marketplace`);
@@ -47,7 +47,7 @@ async function prepare(browser,mobile) {
   const shellMarker=await page.evaluate(()=>window.__deliveryShellMarker=Math.random());
   if(mode==='readme') {
     await marketplace(page,mobile);
-    await page.getByRole('treeitem').filter({hasText:'KMP 全栈示例'}).click();
+    await page.getByRole('treeitem').filter({hasText:'任务工作台示例'}).click();
     await page.locator('.dx-markdown').getByRole('heading',{name:'自动发布',exact:true}).waitFor();
     await page.waitForFunction(()=>{const image=document.querySelector('.dx-markdown img');return image?.complete&&image.naturalWidth>0;});
     await page.locator('.dx-markdown').getByRole('heading',{name:'自动发布',exact:true}).scrollIntoViewIfNeeded();
@@ -60,14 +60,14 @@ async function prepare(browser,mobile) {
   const other=page.frameLocator(`iframe[title="${otherPlugin}"]`);
   await other.getByRole('button').first().waitFor({timeout:180000});
   const otherMarker=await other.locator('body').evaluate(()=>window.__deliveryOtherMarker=Math.random());
-  await select(page,mobile,'KMP 全栈示例');
-  const frame=page.frameLocator('iframe[title="KMP 全栈示例"]');
+  await select(page,mobile,'任务工作台示例');
+  const frame=page.frameLocator('iframe[title="任务工作台示例"]');
   await frame.getByRole('button',{name:'Counter',exact:true}).waitFor({timeout:180000});
   await page.waitForTimeout(700);await frame.getByRole('button',{name:'Counter',exact:true}).click({force:true});
   await frame.getByText('KMP Counter',{exact:true}).waitFor();
   await counter(page,frame);
   assert.equal(await frame.locator('body').evaluate(()=>location.hash),'#counter');
-  const source=await page.locator('iframe[title="KMP 全栈示例"]').getAttribute('src');
+  const source=await page.locator('iframe[title="任务工作台示例"]').getAttribute('src');
   await page.screenshot({path:resolve(output,`${mobile?'mobile':'desktop'}-counter-before.png`)});
   return {context,page,mobile,events,initial,shellMarker,otherMarker,source};
 }
@@ -76,14 +76,14 @@ async function verify(item){
   let painted;
   if(mode==='readme') {
     await page.locator('.dx-markdown').getByRole('heading',{name:'自动发布与滚动更新',exact:true}).waitFor({timeout:3600000});
-    assert.equal(await page.locator('.extension-browser__heading h1').innerText(),'KMP 全栈示例');
+    assert.equal(await page.locator('.extension-browser__heading h1').innerText(),'任务工作台示例');
     await page.waitForFunction(()=>{const image=document.querySelector('.dx-markdown img');return image?.complete&&image.naturalWidth>0;});
     assert(Math.abs(await page.locator('.extension-browser__detail').evaluate(element=>element.scrollTop)-item.readingScroll)<=2,'README update must preserve the reading position');
   } else {
-    const frame=page.frameLocator('iframe[title="KMP 全栈示例"]');
+    const frame=page.frameLocator('iframe[title="任务工作台示例"]');
     await frame.getByText('KMP Counter1',{exact:true}).waitFor({timeout:3600000});
     assert.equal(await frame.locator('body').evaluate(()=>location.hash),'#counter');
-    assert.notEqual(await page.locator('iframe[title="KMP 全栈示例"]').getAttribute('src'),item.source);
+    assert.notEqual(await page.locator('iframe[title="任务工作台示例"]').getAttribute('src'),item.source);
     painted=await counter(page,frame);
     assert.equal(await page.frameLocator(`iframe[title="${otherPlugin}"]`).locator('body').evaluate(()=>window.__deliveryOtherMarker),item.otherMarker);
   }

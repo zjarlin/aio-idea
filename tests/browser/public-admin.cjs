@@ -37,9 +37,9 @@ async function run(browser, mobile) {
     }
     await page.getByRole('navigation', { name: '场景' }).getByRole('button', { name: '社区插件', exact: true }).click();
     const community = await nav();
-    assert.deepEqual(await community.locator('.application-shell__navigation-button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Dioxus 全栈计数器', 'KMP 全栈示例']);
-    await community.getByRole('button', { name: 'Dioxus 全栈计数器', exact: true }).click();
-    const frame = page.frameLocator('iframe[title="Dioxus 全栈计数器"]');
+    assert.deepEqual(await community.locator('.application-shell__navigation-button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))), ['计数器示例', '任务工作台示例']);
+    await community.getByRole('button', { name: '计数器示例', exact: true }).click();
+    const frame = page.frameLocator('iframe[title="计数器示例"]');
     const counter = await verifyCounterState(page, context);
     await page.screenshot({ path: resolve(output, `${mobile ? 'mobile' : 'desktop'}-dioxus.png`) });
     await (await nav()).locator('button[aria-label$="的账户菜单"]').click();
