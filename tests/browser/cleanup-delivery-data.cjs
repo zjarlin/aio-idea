@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const {createHash} = require('node:crypto');
+const {execFileSync} = require('node:child_process');
 const {parseEnv} = require('node:util');
 const {Client} = require('/opt/aio-delivery/ops/node_modules/pg');
 const repositories = process.argv.slice(2);
@@ -21,6 +23,7 @@ const client = new Client({connectionString:settings.AIO_DATABASE_URL});
     const {rows:busy} = await client.query("SELECT id FROM delivery_jobs WHERE git=ANY($1) AND state IN ('queued','building','uploaded','publishing')",[gits]);
     assert.equal(busy.length,0,'测试仓库仍有进行中的构建');
     const {rows:packages} = await client.query('SELECT revision FROM plugin_packages WHERE git=ANY($1)',[gits]);
+    const {rows:jobs} = await client.query('SELECT id FROM delivery_jobs WHERE git=ANY($1)',[gits]);
     await client.query('DELETE FROM delivery_jobs WHERE git=ANY($1)',[gits]);
     await client.query('DELETE FROM delivery_sources WHERE git=ANY($1)',[gits]);
     await client.query('DELETE FROM marketplace_entries WHERE git=ANY($1)',[gits]);
@@ -36,7 +39,19 @@ const client = new Client({connectionString:settings.AIO_DATABASE_URL});
       assert(/^[a-f0-9]{64}$/.test(revision));
       fs.rmSync(path.join(cache,revision),{recursive:true,force:true});
     }
-    console.log(JSON.stringify({repositories,removedSources:sources.length,removedPackages:packages.length}));
+    for(const {id} of jobs){
+      assert(/^\d+$/.test(String(id)));
+      fs.rmSync(`/opt/aio-delivery/job-${id}`,{recursive:true,force:true});
+    }
+    const images = new Set(execFileSync('docker',['image','ls','--no-trunc','--quiet'],{encoding:'utf8'}).trim().split('\n'));
+    let removedCaches = 0;
+    for(const git of gits)for(const image of images){
+      assert(/^sha256:[a-f0-9]{64}$/.test(image));
+      const key = createHash('sha256').update(`${git}:${image}`).digest('hex');
+      const directory = `/opt/aio-delivery/cache/${key}`;
+      if(fs.existsSync(directory)){fs.rmSync(directory,{recursive:true});removedCaches++;}
+    }
+    console.log(JSON.stringify({repositories,removedSources:sources.length,removedPackages:packages.length,removedCaches}));
   } catch(error) {
     await client.query('ROLLBACK');
     throw error;
