@@ -4,6 +4,8 @@
 
 `cleanup-delivery-live.cjs` 通过正式卸载接口清理六个精确命名的临时插件，保留其他安装；数据库清理后以 `verify` 参数再次验证市场中已不存在临时来源。
 
+`cleanup-delivery-repositories.cjs` 使用已授权的 GitHub CLI 删除这六个归档测试仓库，并逐一确认 GitHub 返回 404；凭据需要 `delete_repo` 范围，不读取或输出令牌。
+
 `cleanup-delivery-data.cjs` 在 252 上清理本任务临时仓库的市场、构建记录及按来源和镜像隔离的缓存。必须先通过正式接口卸载，并删除或归档 GitHub 测试仓库以停止发现，脚本只接受 `aio-delivery-e2e-*` 和 `aio-delivery-acceptance-*` 三种语言的精确名称；存在租户绑定或进行中的构建时拒绝清理。
 
 `create-delivery-repositories.cjs` 将 `/tmp/aio-delivery-acceptance-{rust,kotlin,typescript}` 中已由 CLI 生成并提交的干净项目创建为公开仓库，记录首次 push 时间及远端 SHA。`cli-delivery-live.cjs` 通过 `AIO_DELIVERY_SCENARIO=e2e|acceptance` 选择仓库组，`AIO_DELIVERY_LANGUAGE` 可只检查一种语言。`AIO_DELIVERY_OTHER_PLUGIN` 指定 Counter 更新期间应保留实例的另一插件。只读元数据查询在网络失败时最多重试三次。

@@ -1,6 +1,6 @@
 # 全栈插件自动发布验收记录
 
-验收地址：<https://aio.addzero.site/>。2026-09-12 公网功能验收通过，最终保留 `KMP Counter1`。GitHub 临时仓库已归档，删除仍待 CLI 设备授权；市场、运行实例与测试数据已清理。
+验收地址：<https://aio.addzero.site/>。2026-09-12 公网功能验收通过，最终保留 `KMP Counter1`。六个 GitHub 临时仓库及本地工作副本已删除，市场、运行实例、版本包与测试构建数据已清理。
 
 ## 已部署能力
 
@@ -24,7 +24,7 @@
 | README 单独提交后原详情自动更新 | 通过 | `readme-report.json`、`readme-push.json`；提交只改 README，文档与包版本对应，选中项和阅读位置保持 |
 | 真实编译失败保留旧版及下一次提交恢复 | 通过 | `compile-failure-report.json`：任务 14 的 TS2322 不影响原包，真实后端返回 value=3；任务 15 随新提交自动恢复 |
 | 临时安装、版本包、市场及构建数据清理 | 通过 | 六个来源、七个版本包及六个来源缓存已清理；`cleanup-market-report.json` 中仅余两个正式插件 |
-| GitHub 临时仓库删除 | 待授权 | 六个仓库均已归档，`archived-repositories.json`；当前 CLI token 缺少 `delete_repo` 范围 |
+| GitHub 临时仓库删除 | 通过 | `deleted-repositories.json`：六个仓库逐一删除并确认返回 HTTP 404；`local-cleanup-report.json` 记录本地副本清理 |
 
 ## 提交与计时
 
@@ -70,4 +70,4 @@ Rust 镜像已固定预装 Dioxus、wasm-bindgen、wasm-tools、Binaryen 和 esb
 - CLI 已安装到本机和 252，252 二进制 SHA256 为 `e8cd0b29bb379d3c850763efafcc06108f8587edd67019d2ef9a3d6cce86e9ab`。
 - 独立网络出口安装代码已推送平台提交 `e6bda7a`。宿主之后的提交只补充验收脚本与报告，不要求再次部署产品。
 
-全部浏览器截图及机器可读报告位于宿主仓库的 `target/delivery-test`。最终市场截图为 `desktop-final-market.png`、`mobile-final-market.png` 和 `mobile-final-market-list.png`；Counter 截图为 `desktop-counter-after.png`、`mobile-counter-after.png`。源码、任务、包版本与浏览器时间通过 `acceptance-summary.json` 对应。
+全部浏览器截图及机器可读报告位于宿主仓库的 `target/delivery-test`。最终市场截图为 `desktop-final-market.png`、`mobile-final-market.png` 和 `mobile-final-market-list.png`；Counter 截图为 `desktop-counter-after.png`、`mobile-counter-after.png`。源码、任务、包版本与浏览器时间通过 `acceptance-summary.json` 对应。删除临时工作副本前已验证并保存六个源码 Git bundle，位于该目录的 `repositories`，可在远端测试仓库删除后继续核验完整提交。
