@@ -34,36 +34,28 @@ async fn inspect(
     git: &str,
     branch: &str,
 ) -> Result<()> {
-    let output = tokio::time::timeout(
-        Duration::from_secs(30),
-        tokio::process::Command::new("git")
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .args([
-                "ls-remote",
-                "--refs",
-                "--",
-                git,
-                &format!("refs/heads/{branch}"),
-            ])
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await??;
-    ensure!(output.status.success(), "读取远程分支失败");
-    let sha = String::from_utf8(output.stdout)?
-        .split_whitespace()
-        .next()
-        .context("默认分支为空")?
-        .to_owned();
+    #[derive(Deserialize)]
+    struct Commit {
+        sha: String,
+    }
+    let commits: Vec<Commit> = request(client, &format!("repos/{repo}/commits"))
+        .query(&[("sha", branch), ("per_page", "1")])
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let sha = commits.into_iter().next().context("默认分支为空")?.sha;
     ensure!(
         sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
         "无效提交 SHA"
     );
     let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM delivery_sources WHERE git=$1 AND desired_sha=$2 AND enabled)",
+        "SELECT EXISTS(SELECT 1 FROM delivery_sources WHERE git=$1 AND desired_sha=$2 AND branch=$3 AND enabled)",
     )
     .bind(git)
     .bind(&sha)
+    .bind(branch)
     .fetch_one(&state.store.pool)
     .await?;
     if exists {
@@ -85,7 +77,7 @@ async fn inspect(
     let mut tx = state.store.pool.begin().await?;
     sqlx::query("INSERT INTO delivery_sources(git,branch,desired_sha) VALUES($1,$2,$3) ON CONFLICT(git) DO UPDATE SET branch=EXCLUDED.branch,desired_sha=EXCLUDED.desired_sha,enabled=TRUE,updated_at=now()")
         .bind(git).bind(branch).bind(&sha).execute(&mut *tx).await?;
-    sqlx::query("UPDATE delivery_jobs SET state='superseded',updated_at=now() WHERE git=$1 AND source_revision<>$2 AND state='queued'").bind(git).bind(&sha).execute(&mut *tx).await?;
+    sqlx::query("UPDATE delivery_jobs SET state='superseded',lease_until=NULL,updated_at=now() WHERE git=$1 AND source_revision<>$2 AND state IN ('queued','building','uploaded','publishing')").bind(git).bind(&sha).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO delivery_jobs(git,source_revision,recipe) VALUES($1,$2,$3) ON CONFLICT(git,source_revision) DO NOTHING")
         .bind(git).bind(&sha).bind(serde_json::to_value(manifest.build)?).execute(&mut *tx).await?;
     tx.commit().await?;
@@ -96,19 +88,19 @@ async fn scan(
     state: &RuntimeState,
     client: &Client,
     owner: &str,
-    etags: &mut std::collections::HashMap<usize, String>,
+    etags: &mut std::collections::HashMap<usize, (String, bool)>,
 ) -> Result<()> {
     for page in 1..=100 {
         let mut request = request(
             client,
             &format!("users/{owner}/repos?per_page=100&page={page}&sort=updated"),
         );
-        if let Some(etag) = etags.get(&page) {
+        if let Some((etag, _)) = etags.get(&page) {
             request = request.header("if-none-match", etag);
         }
         let response = request.send().await?;
         if response.status() == StatusCode::NOT_MODIFIED {
-            if !etags.contains_key(&(page + 1)) {
+            if etags.get(&page).is_some_and(|(_, last)| *last) {
                 break;
             }
             continue;
@@ -165,7 +157,7 @@ async fn scan(
         if failed {
             etags.remove(&page);
         } else if let Some(etag) = etag {
-            etags.insert(page, etag);
+            etags.insert(page, (etag, last));
         }
         if last {
             etags.retain(|p, _| *p <= page);
