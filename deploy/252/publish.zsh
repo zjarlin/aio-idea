@@ -54,7 +54,7 @@ dx build --platform web --release --debug-symbols false
 readonly release="$artifact/release"
 mkdir -p "$release"
 cp "$CARGO_TARGET_DIR/$target_directory/release/aio-idea" "$release/aio-idea"
-cp -R target/dx/aio-idea/release/web/public "$release/web"
+cp -R "$CARGO_TARGET_DIR/dx/aio-idea/release/web/public" "$release/web"
 cp aio.toml "$release/aio.toml"
 mkdir -p "$release/systemd"
 cp deploy/aio-plugin-supervisor.service "$release/systemd/aio-plugin-supervisor.service"
