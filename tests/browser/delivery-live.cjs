@@ -39,8 +39,11 @@ async function prepare(browser,mobile) {
     await marketplace(page,mobile);
     await page.getByRole('treeitem').filter({hasText:'KMP 全栈示例'}).click();
     await page.locator('.dx-markdown').getByRole('heading',{name:'自动发布',exact:true}).waitFor();
+    await page.waitForFunction(()=>{const image=document.querySelector('.dx-markdown img');return image?.complete&&image.naturalWidth>0;});
+    await page.locator('.dx-markdown').getByRole('heading',{name:'自动发布',exact:true}).scrollIntoViewIfNeeded();
+    const readingScroll=await page.locator('.extension-browser__detail').evaluate(element=>element.scrollTop);
     await page.screenshot({path:resolve(output,`${mobile?'mobile':'desktop'}-readme-before.png`)});
-    return {context,page,mobile,events,initial,shellMarker};
+    return {context,page,mobile,events,initial,shellMarker,readingScroll};
   }
   await page.getByRole('navigation',{name:'场景'}).getByRole('button',{name:'社区插件',exact:true}).click();
   await select(page,mobile,'Dioxus 全栈计数器');
@@ -65,6 +68,7 @@ async function verify(item){
     await page.locator('.dx-markdown').getByRole('heading',{name:'自动发布与滚动更新',exact:true}).waitFor({timeout:3600000});
     assert.equal(await page.locator('.extension-browser__heading h1').innerText(),'KMP 全栈示例');
     await page.waitForFunction(()=>{const image=document.querySelector('.dx-markdown img');return image?.complete&&image.naturalWidth>0;});
+    assert(Math.abs(await page.locator('.extension-browser__detail').evaluate(element=>element.scrollTop)-item.readingScroll)<=2,'README update must preserve the reading position');
   } else {
     const frame=page.frameLocator('iframe[title="KMP 全栈示例"]');
     await frame.getByText('KMP Counter1',{exact:true}).waitFor({timeout:3600000});
@@ -87,6 +91,15 @@ async function verify(item){
   await mkdir(output,{recursive:true});
   const browser=await chromium.launch({channel:'chrome',headless:true});
   try {
+    if(process.env.AIO_DELIVERY_BASE_SHA){
+      const context=await contextFor(browser,base,false);const deadline=Date.now()+3600000;
+      console.log('Waiting for the automatic baseline publication before opening the two persistent pages.');
+      while((await metadata(context)).details.source_revision!==process.env.AIO_DELIVERY_BASE_SHA){
+        assert(Date.now()<deadline,'baseline publication timed out');
+        await new Promise(resolve=>setTimeout(resolve,10000));
+      }
+      await context.close();
+    }
     const items=[await prepare(browser,false),await prepare(browser,true)];
     const counts=items.map(item=>item.events.mounts.length);
     await Promise.all(items.map(item=>item.page.waitForTimeout(61000)));

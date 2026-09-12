@@ -20,7 +20,9 @@ const plugins=[
     await page.goto(base);await page.locator('.application-shell:visible').waitFor();
     await page.getByRole('navigation',{name:'场景'}).getByRole('button',{name:'社区插件',exact:true}).click();
     const reports=[];
-    for(const plugin of plugins){
+    const selected=plugins.filter(plugin=>!process.env.AIO_DELIVERY_LANGUAGE||plugin.label.toLowerCase().startsWith(process.env.AIO_DELIVERY_LANGUAGE));
+    assert(selected.length>0,'unknown delivery language');
+    for(const plugin of selected){
       const firstResponse=responses.length;
       await select(page,false,plugin.label);const frame=page.frameLocator(`iframe[title="${plugin.label}"]`);
       await frame.getByText(plugin.front,{exact:true}).first().waitFor({timeout:180000});
@@ -41,7 +43,7 @@ const plugins=[
       await page.screenshot({path:resolve(output,`${plugin.label.split(' ')[0].toLowerCase()}-cli-live.png`)});
     }
     assert.deepEqual(errors,[]);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-    await writeFile(resolve(output,'cli-live-report.json'),JSON.stringify(reports,null,2));
+    await writeFile(resolve(output,`${process.env.AIO_DELIVERY_LANGUAGE||'all'}-cli-live-report.json`),JSON.stringify(reports,null,2));
     console.log(JSON.stringify(reports));
   }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
