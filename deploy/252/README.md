@@ -43,4 +43,6 @@ curl --fail https://aio.addzero.site/health
 
 浏览器验收：先构建服务端与 Web，启动副本宿主，再设置 `NODE_PATH` 为已安装 Playwright 的依赖目录、`AIO_COOKIE_FILE` 为有效会话 Cookie 文件，运行 `node tests/browser/component-marketplace.cjs`。报告和桌面、手机截图位于 `target/component-delivery/rehearsal/`。`AIO_URL` 可以指向正式宿主；正式验收最后卸载本次安装，使大屏保留在可安装列表。测试失败信息不输出 Cookie。
 
+2026-09-12 的正式发布、整包摘要、测试结果及 Agent 运行边界见 [Component 交付验收](component-acceptance.md)。
+
 这条路径是受控发布器，不是公网 Git 安装器。公网运行时只安装已构建的 `wasm-component`、`page-definition` 与受限 `process` 产物，安装过程不会执行仓库脚本。CI 同时上传原始 Git commit 和所需 tree 对象；服务端离线校验对象哈希及清单、artifact 的提交归属，无需为发布回连远程 Git。健康检查和激活成功后才更新数据库市场条目。

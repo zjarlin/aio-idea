@@ -1,7 +1,7 @@
 const { readFile, writeFile } = require('node:fs/promises');
 const {chromium}=require('playwright');
 
-const launchBrowser=()=>chromium.launch({channel:'chrome',headless:true,args:['--disable-quic',...(process.env.AIO_BROWSER_HTTP1==='1'?['--disable-http2']:[])]});
+const launchBrowser=()=>chromium.launch({channel:'chrome',headless:true,args:['--disable-quic',...(process.env.AIO_BROWSER_HTTP1==='1'?['--disable-http2']:[])],...(process.env.AIO_BROWSER_PROXY?{proxy:{server:process.env.AIO_BROWSER_PROXY}}:{})});
 const grants=new WeakMap();
 
 async function contextFor(browser,base,mobile) {

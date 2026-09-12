@@ -1,14 +1,14 @@
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const {chromium}=require('playwright');
-const {marketplace}=require('./live-session.cjs');
+const {marketplace,launchBrowser}=require('./live-session.cjs');
 const base=process.env.AIO_URL||'http://127.0.0.1:4215';
 const output=path.resolve('target/component-delivery',new URL(base).hostname==='127.0.0.1'?'rehearsal':'public');
 const plugin=path.resolve('../aio-plugin-screen');
 const git='https://github.com/zjarlin/aio-plugin-screen.git';
 const name=`市场验收 ${Date.now()}`;
 fs.mkdirSync(output,{recursive:true});
+fs.writeFileSync(path.join(output,'current-run.json'),JSON.stringify({base,name}));
 function cookies(){return fs.readFileSync(process.env.AIO_COOKIE_FILE,'utf8').split(/\r?\n/).filter(l=>l&&(!l.startsWith('#')||l.startsWith('#HttpOnly_'))).map(l=>{
   const [,,cookiePath,,expires,name,value]=l.replace(/^#HttpOnly_/,'').split('\t');
   return {name,value,url:new URL(cookiePath,base).href,secure:new URL(base).protocol==='https:',httpOnly:l.startsWith('#HttpOnly_'),...(Number(expires)>0?{expires:Number(expires)}:{})};
@@ -38,11 +38,12 @@ const pixels=canvas=>canvas.evaluate(c=>{
   return {painted,colors:colors.size,width:c.width,height:c.height};
 });
 async function run(){
-  const browser=await chromium.launch({channel:'chrome',headless:true});
+  const browser=await launchBrowser();
   const context=await browser.newContext({viewport:{width:1440,height:1000}});await context.addCookies(cookies());
   const page=await context.newPage();page.setDefaultTimeout(60000);const errors=[];
   page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
-  let screenId,datasetId;
+  page.on('requestfailed',request=>{if(request.failure()?.errorText!=='net::ERR_ABORTED')errors.push(`${new URL(request.url()).pathname.replace(/\/components\/assets\/[^/]+/,'/components/assets/[token]')}: ${request.failure()?.errorText}`);});
+  let screenId,datasetId,installedByTest=false;
   const entry=async()=>{const response=await context.request.get(`${base}/api/runtime/marketplace`);assert(response.ok());return (await response.json()).data.find(e=>e.git===git);};
   try{
     if(process.env.AIO_COMPONENT_TEST_RESET==='1'){
@@ -52,8 +53,10 @@ async function run(){
     }
     const binary=fs.readFileSync(path.join(plugin,'dist/screen-0.1.0.aio-plugin'));
     const publish=await context.request.post(`${base}/api/runtime/components/publish`,{headers:{'content-type':'application/vnd.aio.component+gzip'},data:binary,timeout:240000});
-    assert(publish.ok(),`Publish ${publish.status()}: ${await publish.text()}`);
+    assert(publish.ok(),`Publish ${publish.status()}: ${(await publish.text()).slice(0,300)}`);
     const published=(await publish.json()).data;console.log('Published Component');
+    const download=await context.request.get(`${base}/api/runtime/packages/${published.revision}`,{timeout:120000});
+    assert(download.ok());assert((await download.body()).equals(binary),'Downloaded bundle must match the published file');
     const docs=await context.request.post(`${base}/api/runtime/components/${published.revision}/documentation`,{headers:{'content-type':'text/plain'},data:fs.readFileSync(path.join(plugin,'README.md'),'utf8')});assert(docs.ok());
     assert(!(await entry()).installed,'Publication must not install the plugin');
     await page.goto(base);await page.locator('.application-shell:visible').waitFor();await marketplace(page,false);
@@ -61,7 +64,7 @@ async function run(){
     await page.getByRole('treeitem').filter({hasText:'数据大屏'}).click();
     await page.getByRole('button',{name:'安装',exact:true}).waitFor();
     await page.screenshot({path:path.join(output,'marketplace-available.png')});
-    await page.getByRole('button',{name:'安装',exact:true}).click();
+    installedByTest=true;await page.getByRole('button',{name:'安装',exact:true}).click();
     await page.locator('.extension-browser__actions').getByText('已启用',{exact:true}).waitFor();
     const installed=await entry();assert.equal(installed.active_revision,published.revision);console.log('Installed through marketplace');
     let frame=await openScreen(page,false);console.log('Mounted native frontend');
@@ -101,11 +104,24 @@ async function run(){
     await marketplace(page,false);await page.getByRole('textbox',{name:'搜索插件',exact:true}).fill('数据大屏');await page.getByRole('treeitem').filter({hasText:'数据大屏'}).click();
     await page.getByLabel('管理插件',{exact:true}).click();await page.getByRole('menuitem',{name:'卸载',exact:true}).click();
     await page.getByRole('button',{name:'确认卸载',exact:true}).click();await page.getByRole('button',{name:'安装',exact:true}).waitFor();
-    assert(!(await entry()).installed);assert.deepEqual(errors,[]);
+    assert(!(await entry()).installed);installedByTest=false;assert.deepEqual(errors,[]);
     await page.screenshot({path:path.join(output,'marketplace-final.png')});
-    const report={base,revision:published.revision,source:installed.source_id,available:true,installedThroughUI:true,csvImport:true,dragAndBind:true,publish:true,reload:true,badPackageRejected:true,uninstalledThroughUI:true,desktopPixels,mobilePixels,errors};
+    const report={base,revision:published.revision,source:installed.source_id,available:true,downloadVerified:true,installedThroughUI:true,csvImport:true,dragAndBind:true,publish:true,reload:true,badPackageRejected:true,uninstalledThroughUI:true,desktopPixels,mobilePixels,errors};
     fs.writeFileSync(path.join(output,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
-  }catch(error){await page.screenshot({path:path.join(output,'failure.png')}).catch(()=>{});console.error(JSON.stringify({errors}));throw error;}
+  }catch(error){
+    await page.screenshot({path:path.join(output,'failure.png')}).catch(()=>{});
+    if(installedByTest){
+      try{
+        const screen=(await rpc(page,'GET','/screens')).find(s=>s.title===name);
+        if(screen)await rpc(page,'DELETE',`/screens/${screen.id}`);
+        const dataset=(await rpc(page,'GET','/datasets')).find(d=>d.name===name);
+        if(dataset)await rpc(page,'DELETE',`/datasets/${dataset.id}`);
+      }catch(cleanup){console.error(`Fixture cleanup incomplete: ${cleanup.message.split('Call log:')[0]}`);}
+      try{const current=await entry();if(current?.installed)assert((await context.request.post(`${base}/api/runtime/plugins/${current.source_id}/uninstall`)).ok());}
+      catch(cleanup){console.error(`Installation cleanup incomplete: ${cleanup.message.split('Call log:')[0]}`);}
+    }
+    console.error(JSON.stringify({errors}));throw error;
+  }
   finally{await browser.close();}
 }
 run().catch(e=>{console.error(e.message.split('Call log:')[0]);process.exitCode=1;});
