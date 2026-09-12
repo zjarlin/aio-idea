@@ -29,9 +29,15 @@ const output = path.resolve(process.env.AIO_PERFORMANCE_OUTPUT || 'target/startu
       page.on('response', onResponse);
       const started = Date.now();
       let failure;
+      let documentHeaders;
       try {
-        await page.goto(base, {waitUntil: 'domcontentloaded', timeout: 60000});
+        const document = await page.goto(base, {waitUntil: 'domcontentloaded', timeout: 60000});
+        documentHeaders = {cache: document.headers()['cache-control'], serverTiming: document.headers()['server-timing']};
         await page.locator('.application-shell:visible').waitFor({timeout: 60000});
+        await page.waitForFunction(() => {
+          const shell = document.querySelector('.application-shell');
+          return shell && getComputedStyle(shell).display === 'grid';
+        }, null, {timeout: 60000});
       }
       catch (error) { failure = error.message.split('Call log:')[0]; }
       const readyMs = Date.now() - started;
@@ -39,15 +45,20 @@ const output = path.resolve(process.env.AIO_PERFORMANCE_OUTPUT || 'target/startu
       const metrics = await page.evaluate(() => ({navigation: performance.getEntriesByType('navigation')[0]?.toJSON(),
         resources: performance.getEntriesByType('resource').map(({name, startTime, responseStart, responseEnd, transferSize, encodedBodySize, decodedBodySize}) =>
           ({path: new URL(name).pathname, startTime, responseStart, responseEnd, transferSize, encodedBodySize, decodedBodySize}))}));
+      const startupApiRequests = metrics.resources.filter(resource => ['/api/runtime/bootstrap', '/api/runtime/catalog', '/api/auth/session'].includes(resource.path)).length;
       await page.screenshot({path: path.join(output, `${mobile ? 'mobile' : 'desktop'}-${phase}-startup.png`)});
-      report.push({viewport: mobile ? 'mobile' : 'desktop', phase, readyMs, requests, failures, failure,
+      report.push({viewport: mobile ? 'mobile' : 'desktop', phase, readyMs, startupApiRequests, documentHeaders, requests, failures, failure,
         visibleText: failure ? await page.locator('body').innerText() : undefined, metrics});
       fs.writeFileSync(path.join(output, 'startup-report.json'), JSON.stringify(report, null, 2));
-      console.log(JSON.stringify({viewport: mobile ? 'mobile' : 'desktop', phase, readyMs,
+      console.log(JSON.stringify({viewport: mobile ? 'mobile' : 'desktop', phase, readyMs, startupApiRequests, documentHeaders,
         api: requests.filter(request => request.path.startsWith('/api/'))}));
       page.off('requestfailed', onFailure);
       page.off('response', onResponse);
       if (failure) throw new Error(failure);
+      if (process.env.AIO_EXPECT_EMBEDDED === '1') {
+        assert.equal(startupApiRequests, 0, 'Initial workspace must use its freshly authenticated HTML snapshot');
+        assert.equal(documentHeaders.cache, 'private, no-store');
+      }
       }
       await closeContext(context);
     }

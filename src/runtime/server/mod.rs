@@ -2,6 +2,7 @@ mod activation_store;
 #[cfg(test)]
 mod admin_test_support;
 mod bootstrap;
+mod bootstrap_document;
 #[cfg(test)]
 mod bootstrap_tests;
 mod delivery;
@@ -54,6 +55,7 @@ use sqlx::postgres::PgPoolOptions;
 
 use crate::runtime::PublishState;
 
+pub(crate) use bootstrap_document::document as bootstrap_document;
 pub use routes::router;
 pub use supervisor::run as run_supervisor;
 

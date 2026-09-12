@@ -3,6 +3,7 @@ const {createServer} = require('node:http');
 const {readFile, mkdir, writeFile, realpath} = require('node:fs/promises');
 const {resolve, extname, sep} = require('node:path');
 const {chromium} = require('playwright');
+const {parse, serialize} = require('parse5');
 
 const root = resolve('target/dx/aio-idea/release/web/public');
 const output = resolve('target/startup-test/local');
@@ -32,7 +33,16 @@ const server = createServer(async (req, res) => {
     if (path === '/favicon.ico') return res.writeHead(204).end();
     const full = await realpath(resolve(root, path === '/' ? 'index.html' : path.slice(1)));
     assert(full.startsWith(await realpath(root) + sep));
-    const bytes = await readFile(full);
+    let bytes = await readFile(full);
+    if (path === '/' && mode === 'embedded') {
+      const document = parse(bytes.toString());
+      const head = document.childNodes.find(node => node.tagName === 'html').childNodes.find(node => node.tagName === 'head');
+      const script = {nodeName: 'script', tagName: 'script', namespaceURI: 'http://www.w3.org/1999/xhtml',
+        attrs: [{name: 'id', value: 'aio-startup-snapshot'}, {name: 'type', value: 'application/json'}], childNodes: [], parentNode: head};
+      script.childNodes.push({nodeName: '#text', value: JSON.stringify({snapshot: {permissions: [], catalog}, etag: `"${revision}"`}).replaceAll('<', '\\u003c'), parentNode: script});
+      head.childNodes.unshift(script);
+      bytes = Buffer.from(serialize(document));
+    }
     res.writeHead(200, {'content-type': mime[extname(full)] || 'application/octet-stream'}).end(bytes);
   } catch (error) { res.writeHead(500).end(error.message); }
 });
@@ -44,6 +54,13 @@ async function run(browser, mobile) {
   page.on('pageerror', error => errors.push(error.message));
   const shell = page.locator('.application-shell');
   try {
+    mode = 'embedded'; revision = 'a'; requests = [];
+    await page.goto(origin); await shell.waitFor();
+    assert.equal(requests.length, 0, 'An authenticated HTML snapshot must render without an extra startup request');
+    assert.equal(await page.locator('#aio-startup-snapshot').count(), 0, 'Consume the document snapshot only once');
+    const embeddedPoll = page.waitForResponse(r => r.url().endsWith('/bootstrap') && r.status() === 304);
+    await invalidated(page); await embeddedPoll;
+    assert.equal(requests[0].etag, '"a"');
     mode = 'ok'; revision = 'a'; requests = [];
     const start = performance.now();
     await page.goto(origin);
@@ -94,7 +111,7 @@ async function run(browser, mobile) {
     await page.getByRole('button', {name: '登录', exact: true}).waitFor();
     assert.deepEqual(errors, []);
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-    return {viewport: mobile ? 'mobile' : 'desktop', coldMs, initialRequests: 1, unchanged304: true,
+    return {viewport: mobile ? 'mobile' : 'desktop', coldMs, embeddedStartupRequests: 0, fallbackStartupRequests: 1, unchanged304: true,
       workspaceRetained: true, transientRetry: true, focusDoesNotRestart: true, logoutClearsWorkspace: true, bounds, consoleErrors: errors};
   } catch (error) {
     await page.screenshot({path: resolve(output, 'failure.png')}); throw error;

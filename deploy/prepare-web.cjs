@@ -11,9 +11,12 @@ const file = path.join(root, 'index.html');
 const document = parse(fs.readFileSync(file, 'utf8'));
 const head = document.childNodes.find(node => node.tagName === 'html').childNodes.find(node => node.tagName === 'head');
 const href = `/assets/${wasm[0]}`;
-if (!head.childNodes.some(node => node.tagName === 'link' && node.attrs.some(attr => attr.name === 'href' && attr.value === href))) {
+const styles = fs.readdirSync(assets).filter(name => /-dxh[a-f0-9]+\.css$/.test(name));
+for (const attributes of [{rel: 'preload', as: 'fetch', type: 'application/wasm', href, crossorigin: ''},
+  ...styles.map(name => ({rel: 'preload', as: 'style', href: `/assets/${name}`}))]) {
+  if (head.childNodes.some(node => node.tagName === 'link' && node.attrs.some(attr => attr.name === 'href' && attr.value === attributes.href))) continue;
   head.childNodes.push({nodeName: 'link', tagName: 'link', namespaceURI: 'http://www.w3.org/1999/xhtml',
-    attrs: Object.entries({rel: 'preload', as: 'fetch', type: 'application/wasm', href, crossorigin: ''}).map(([name, value]) => ({name, value})),
+    attrs: Object.entries(attributes).map(([name, value]) => ({name, value})),
     childNodes: [], parentNode: head});
 }
 fs.writeFileSync(file, serialize(document));
@@ -29,4 +32,4 @@ for (const name of fs.readdirSync(assets, {recursive: true})) {
     report.push({path: name, bytes: bytes.length, gzipBytes: compressed.length});
   }
 }
-console.log(JSON.stringify({preload: href, assets: report}));
+console.log(JSON.stringify({preload: href, styles, assets: report}));
