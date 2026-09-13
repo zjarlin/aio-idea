@@ -168,6 +168,7 @@ test('v2 warming and foreground mounts share verified bytes across distinct tick
   await f.create({ ...config, background: true })('app.js', 'warm');
   await f.create(config)('app.js', 'foreground');
   await f.create({ ...config, revision: 'other-plugin' })('app.js', 'other-plugin');
+  await f.create({ ...config, assets: { 'renamed.js': config.assets['app.js'] } })('renamed.js', 'renamed');
   assert.equal(f.requests.length, 1);
   assert.equal(f.requests[0].url, '/api/runtime/components/assets/warm/app.js');
   assert.equal(f.requests[0].options.priority, 'low');

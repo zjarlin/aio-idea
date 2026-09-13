@@ -28,7 +28,8 @@ async function warmFrontendAssets(config, signal) {
       // 预热模块和大资源，避免包内未使用的源码碎片占满队列。
       paths.sort((a, b) => mount.asset_sizes[a] - mount.asset_sizes[b]);
       const queue = paths.filter(path => {
-        const key = `${mount.assets[path]}/${path}`;
+        const extension = path.match(/\.[^./]+$/)?.[0].toLowerCase() || '';
+        const key = `${mount.assets[path]}/${extension}`;
         if (resources.has(key)) return false;
         const size = mount.asset_sizes[path];
         if (!Number.isSafeInteger(size) || size < 0 || size > budget || count >= 480) return false;

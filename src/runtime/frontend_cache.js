@@ -42,7 +42,8 @@ function createFrontendAssetCache(config) {
     signal?.throwIfAborted();
     if (!Object.hasOwn(config.assets, path)) throw new Error('插件未声明该资源');
     const expected = config.assets[path];
-    const key = new URL(`/_aio_cache/${expected}/${path.split('/').map(encodeURIComponent).join('/')}`, location.origin).href;
+    const extension = path.match(/\.[^./]+$/)?.[0].toLowerCase() || '';
+    const key = new URL(`/_aio_cache/${expected}/asset${encodeURIComponent(extension)}`, location.origin).href;
     const pendingKey = name + key;
     const pending = inflight.get(pendingKey);
     if (pending) {
@@ -63,7 +64,10 @@ function createFrontendAssetCache(config) {
       const cached = await cache?.match(key).catch(() => null);
       if (cached) {
         const bytes = await cached.arrayBuffer();
-        if (await digest(bytes) === expected) return { bytes, type: cached.headers.get('content-type') };
+        if (await digest(bytes) === expected) {
+          signal?.throwIfAborted();
+          return { bytes, type: cached.headers.get('content-type') };
+        }
         await cache.delete(key).catch(() => {});
       }
       signal?.throwIfAborted();

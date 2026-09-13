@@ -15,7 +15,7 @@ async function run() {
     const context = await contextFor(browser, base, false);
     const page = await context.newPage();
     page.setDefaultTimeout(120000);
-    const wasm = [], errors = [], temporary = new Set(), released = new Set();
+    const wasm = [], errors = [], temporary = new Set(), released = new Set(), expectedWasm = new Set();
     let backgroundBusiness = 0;
     let opening = false;
     const redact = value => value.replace(/\/components\/assets\/[^/]+/g, '/components/assets/[token]').replace(/\/components\/[^/]+\/(request|renew)/g, '/components/[token]/$1');
@@ -28,20 +28,31 @@ async function run() {
       if (request.method() === 'DELETE' && url.pathname.startsWith('/api/runtime/frontend/')) released.add(url.pathname.split('/').at(-1));
     });
     page.on('response', response => {
-      if (!opening && response.url().endsWith('/api/runtime/frontend/mount') && response.ok()) void response.json().then(value => temporary.add(value.data.token));
+      if (!opening && response.url().endsWith('/api/runtime/frontend/mount') && response.ok()) void response.json().then(({ data }) => {
+        temporary.add(data.token);
+        if (data.abi === 2) for (const [name, digest] of Object.entries(data.assets)) if (name.endsWith('.wasm')) expectedWasm.add(digest);
+        console.log(JSON.stringify({ backgroundMount: data.abi || 1, assetCount: Object.keys(data.assets).length }));
+      }).catch(() => {});
     });
+    const catalog = (await (await context.request.get(`${base}/api/runtime/catalog`)).json()).data;
+    const pages = catalog.pages.filter(item => item.body.kind === 'frontend').length;
     await page.goto(base);
     await page.locator('.application-shell:visible').waitFor();
     const shellAt = Date.now();
     if (!baseline) {
-      await page.waitForFunction(async () => {
-        const keys = (await Promise.all((await caches.keys()).filter(name => name.startsWith('aio-plugin-assets-v1-')).map(async name => (await (await caches.open(name)).keys()).map(key => key.url)))).flat();
-        return keys.filter(key => key.endsWith('/frontend.wasm')).length >= 2;
-      }, null, { timeout: 180000 });
-      await page.waitForTimeout(1500);
-      assert(temporary.size >= 2, 'No background mounts were created');
+      for (let i = 0; i < 240; i++) {
+        if (temporary.size >= pages && [...temporary].every(token => released.has(token))) break;
+        await page.waitForTimeout(1000);
+      }
+      console.log(JSON.stringify({ backgroundMounts: temporary.size, releasedMounts: released.size, backgroundWasm: wasm.map(item => item.file), backgroundBusiness, errors }));
+      assert(temporary.size >= pages, 'Background queue did not visit all accessible plugins');
       assert([...temporary].every(token => released.has(token)), 'Background mount was not released');
       assert.equal(backgroundBusiness, 0, 'Warming executed plugin business requests');
+      assert(expectedWasm.size >= 3, 'Agent and Memory manifests were not received');
+      assert(await page.evaluate(async digests => {
+        const keys = (await Promise.all((await caches.keys()).filter(name => name.startsWith('aio-plugin-assets-v1-')).map(async name => (await (await caches.open(name)).keys()).map(key => key.url)))).flat();
+        return digests.every(digest => keys.some(key => key.includes(`/${digest}/`)));
+      }, [...expectedWasm]), 'The background budget omitted an Agent or Memory Wasm');
     }
     const warmingMs = baseline ? null : Date.now() - shellAt;
     const measurements = [];
@@ -63,6 +74,7 @@ async function run() {
       await frame.locator('canvas').first().waitFor();
       await frame.getByRole('button', { name: '新建记忆', exact: true }).first().waitFor();
       measurements.push({ mode, readyMs: Date.now() - start, wasmDownloads: wasm.length - before });
+      console.log(JSON.stringify(measurements.at(-1)));
       if (!baseline) assert.equal(wasm.length - before, 0, 'Opening downloaded a prewarmed Wasm again');
       for (const [name, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }]]) {
         await page.setViewportSize(viewport);
