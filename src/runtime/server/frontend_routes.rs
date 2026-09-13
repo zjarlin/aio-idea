@@ -77,6 +77,7 @@ pub(super) async fn mount(
             session_context,
             context,
             assets: package.assets.clone(),
+            asset_sizes: package.asset_sizes.clone(),
         },
     }))
 }

@@ -17,6 +17,7 @@ pub(super) struct MountResponse {
     pub session_context: String,
     pub context: String,
     pub assets: std::collections::BTreeMap<String, String>,
+    pub asset_sizes: std::collections::BTreeMap<String, usize>,
 }
 
 #[derive(Deserialize)]

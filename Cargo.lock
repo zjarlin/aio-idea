@@ -695,7 +695,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-bundle"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=8a6d8133a1c58e30e7e36af3bd1df624fd5e7cbc#8a6d8133a1c58e30e7e36af3bd1df624fd5e7cbc"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=6844ab72d26058c154fe6489b560477b1baf50b1#6844ab72d26058c154fe6489b560477b1baf50b1"
 dependencies = [
  "anyhow",
  "az-plugin-contract",
@@ -712,7 +712,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-contract"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=8a6d8133a1c58e30e7e36af3bd1df624fd5e7cbc#8a6d8133a1c58e30e7e36af3bd1df624fd5e7cbc"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=6844ab72d26058c154fe6489b560477b1baf50b1#6844ab72d26058c154fe6489b560477b1baf50b1"
 dependencies = [
  "serde",
  "serde_json",
@@ -762,7 +762,7 @@ dependencies = [
 [[package]]
 name = "az-plugin-runtime"
 version = "2026.5.10"
-source = "git+https://github.com/zjarlin/aio-platform.git?rev=8a6d8133a1c58e30e7e36af3bd1df624fd5e7cbc#8a6d8133a1c58e30e7e36af3bd1df624fd5e7cbc"
+source = "git+https://github.com/zjarlin/aio-platform.git?rev=6844ab72d26058c154fe6489b560477b1baf50b1#6844ab72d26058c154fe6489b560477b1baf50b1"
 dependencies = [
  "aes-gcm",
  "anyhow",

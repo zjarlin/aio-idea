@@ -1,5 +1,7 @@
 # 导航浏览器验收
 
+`node --test tests/browser/asset_cache.cjs tests/browser/asset_preload.cjs tests/browser/asset_bridge.cjs tests/browser/guest-bridge.cjs` 覆盖静态资源摘要、下载接管、后台配额、会话版本校验、临时票据回收及隔离消息来源。`asset-preload-live.cjs` 使用正式 Cookie，只读验证登录后预热不触发业务调用、Memory 首次打开及刷新零 Wasm 重复下载，并记录桌面/手机真实画面和耗时；`baseline` 参数测量未预热版本。输出保存在 `target/component-delivery/asset-preload`。
+
 `agent-process.cjs` 使用正式宿主的 v2 发布、安装、页面挂载与 RPC。`publish` 安装智能体及智能体记忆；默认命令验证加密收件、幂等、本地零 Token 检索、图谱激活和 Compose 桌面/移动页面；宿主重启后以 `resume` 检查同一批加密资料仍能受控展示。仅使用随机测试秘密，私有夹具和报告位于 `target/component-delivery/agent-rehearsal` 或 `agent-public`。`AIO_AGENT_TEST_CLEANUP=1` 清理本次来源和会话，保留正式插件安装。
 
 `registration.cjs` 使用 `AIO_URL` 验证桌面和手机的注册弹窗、密码确认、注册后自动登录、重名错误、刷新恢复、再次登录和租户隔离。直接注册不要求验证码、邮箱验证或审核。报告、截图和本次临时账号 ID 保存到 `AIO_REGISTRATION_OUTPUT`（默认 `target/registration-test`），不记录密码或 Cookie。验收后将 `accounts.json` 作为标准输入交给 `cleanup-registration.cjs`，脚本仅清理精确匹配的本次临时账号及其工作区；有其他成员或插件安装时拒绝清理。

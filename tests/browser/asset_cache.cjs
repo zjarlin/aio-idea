@@ -90,16 +90,19 @@ test('cache denial falls back to verified downloads', async () => {
 
 test('writes from different plugin mounts obey the shared entry quota', async () => {
   const f = fixture();
+  const other = Buffer.from('export const value = 43;');
+  const otherSha = createHash('sha256').update(other).digest('hex');
+  f.env.fetch = async url => new Response(url.includes('/two/') ? other : f.bytes);
   const cache = await f.caches.open('aio-plugin-assets-v1-login-a');
   for (let i = 0; i < 512; i++) await cache.put(`old-${i}`, new Response('x', { headers: { 'content-length': '1' } }));
   await Promise.all([
     f.create(f.config)('app.js', 'one'),
-    f.create({ ...f.config, revision: 'revision-b' })('app.js', 'two'),
+    f.create({ ...f.config, revision: 'revision-b', assets: { 'app.js': otherSha } })('app.js', 'two'),
   ]);
   const keys = await cache.keys();
   assert.equal(keys.length, 512);
-  assert(keys.some(key => key.includes('revision-a')));
-  assert(keys.some(key => key.includes('revision-b')));
+  assert(keys.some(key => key.includes(f.config.assets['app.js'])));
+  assert(keys.some(key => key.includes(otherSha)));
   assert(!keys.includes('old-0'));
   assert(!keys.includes('old-1'));
 });
@@ -157,4 +160,46 @@ test('disposed mounts do not continue retrying', async () => {
   f.env.fetch = async () => { calls++; controller.abort(); throw new Error('cancelled'); };
   await assert.rejects(f.create(f.config)('app.js', 'ticket', controller.signal), /cancelled/);
   assert.equal(calls, 1);
+});
+
+test('v2 warming and foreground mounts share verified bytes across distinct tickets', async () => {
+  const f = fixture();
+  const config = { ...f.config, abi: 2 };
+  await f.create({ ...config, background: true })('app.js', 'warm');
+  await f.create(config)('app.js', 'foreground');
+  await f.create({ ...config, revision: 'other-plugin' })('app.js', 'other-plugin');
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].url, '/api/runtime/components/assets/warm/app.js');
+  assert.equal(f.requests[0].options.priority, 'low');
+});
+
+test('foreground takes over an aborted background transfer with its own grant', async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  f.env.fetch = async (url, options) => {
+    f.requests.push({ url, options });
+    if (url.includes('/warm/')) {
+      started();
+      return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+    }
+    return new Response(f.bytes);
+  };
+  const warm = f.create({ ...f.config, abi: 2, background: true })('app.js', 'warm', controller.signal);
+  const rejected = assert.rejects(warm, /cancelled/);
+  await ready;
+  const foreground = f.create({ ...f.config, abi: 2 })('app.js', 'foreground');
+  controller.abort();
+  await rejected;
+  assert.deepEqual(Buffer.from((await foreground).bytes), f.bytes);
+  assert.equal(f.requests.length, 2);
+  assert(f.requests[1].url.includes('/foreground/'));
+});
+
+test('cancelled readers cannot receive a cached resource', async () => {
+  const f = fixture();
+  await f.create(f.config)('app.js', 'ticket');
+  await assert.rejects(f.create(f.config)('app.js', 'ticket', AbortSignal.abort()));
+  assert.equal(f.requests.length, 1);
 });

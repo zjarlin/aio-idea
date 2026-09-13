@@ -25,9 +25,10 @@ function createFrontendAssetCache(config) {
   };
   const download = async (url, signal) => {
     for (let attempt = 0; ; attempt++) {
+      signal?.throwIfAborted();
       try {
         const timeout = AbortSignal.timeout(120000);
-        const response = await fetch(url, { credentials: 'same-origin', redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+        const response = await fetch(url, { credentials: 'same-origin', redirect: 'error', priority: config.background ? 'low' : 'high', signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
         if (response.status === 429 || response.status >= 500) throw new Error(`读取插件资源失败: HTTP ${response.status}`);
         if (!response.ok) return { error: `读取插件资源失败: HTTP ${response.status}` };
         return { bytes: await response.arrayBuffer(), type: response.headers.get('content-type') || 'application/octet-stream' };
@@ -37,12 +38,26 @@ function createFrontendAssetCache(config) {
       }
     }
   };
-  return async (path, ticket, signal) => {
+  const load = async (path, ticket, signal) => {
+    signal?.throwIfAborted();
     if (!Object.hasOwn(config.assets, path)) throw new Error('插件未声明该资源');
     const expected = config.assets[path];
-    const key = new URL(`/_aio_cache/${config.revision}/${expected}/${path.split('/').map(encodeURIComponent).join('/')}`, location.origin).href;
+    const key = new URL(`/_aio_cache/${expected}/${path.split('/').map(encodeURIComponent).join('/')}`, location.origin).href;
     const pendingKey = name + key;
-    if (inflight.has(pendingKey)) return inflight.get(pendingKey);
+    const pending = inflight.get(pendingKey);
+    if (pending) {
+      try {
+        const result = await pending.operation;
+        signal?.throwIfAborted();
+        return result;
+      } catch (error) {
+        signal?.throwIfAborted();
+        // 后台任务取消后，前台使用自己的有效票据接管下载。
+        if (!pending.signal?.aborted) throw error;
+        if (inflight.get(pendingKey) === pending) inflight.delete(pendingKey);
+        return load(path, ticket, signal);
+      }
+    }
     const operation = (async () => {
       const cache = await storage;
       const cached = await cache?.match(key).catch(() => null);
@@ -51,15 +66,20 @@ function createFrontendAssetCache(config) {
         if (await digest(bytes) === expected) return { bytes, type: cached.headers.get('content-type') };
         await cache.delete(key).catch(() => {});
       }
-      const result = await download(`/api/runtime/frontend/assets/${ticket}/${path.split('/').map(encodeURIComponent).join('/')}`, signal);
+      signal?.throwIfAborted();
+      const route = config.abi === 2 ? 'components' : 'frontend';
+      const result = await download(`/api/runtime/${route}/assets/${ticket}/${path.split('/').map(encodeURIComponent).join('/')}`, signal);
       if (result.error) throw new Error(result.error);
       const { bytes, type } = result;
       if (bytes.byteLength > limit || await digest(bytes) !== expected) throw new Error('插件资源摘要或大小校验失败');
+      signal?.throwIfAborted();
       if (cache) await save(cache, key, bytes, type).catch(() => {});
       return { bytes, type };
     })();
-    inflight.set(pendingKey, operation);
+    const entry = { operation, signal };
+    inflight.set(pendingKey, entry);
     try { return await operation; }
-    finally { if (inflight.get(pendingKey) === operation) inflight.delete(pendingKey); }
+    finally { if (inflight.get(pendingKey) === entry) inflight.delete(pendingKey); }
   };
+  return load;
 }

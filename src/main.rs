@@ -113,6 +113,14 @@ fn Workspace() -> dioxus::prelude::Element {
         }
     };
     let catalog = snapshot.catalog;
+    let preload = serde_json::json!({
+        "session_context": catalog.session_context,
+        "context": catalog.context,
+        "pages": catalog.pages.iter().filter(|page| {
+            matches!(page.body, runtime::PageBody::Frontend { .. })
+                && page.required_permission.as_deref().is_none_or(|permission| snapshot.permissions.iter().any(|item| item == permission))
+        }).map(|page| serde_json::json!({ "id": page.id, "version": catalog.page_versions.get(&page.id) })).collect::<Vec<_>>()
+    }).to_string();
     let mut static_plugins = match plugins::client_catalog() {
         Ok(value) => value,
         Err(error) => {
@@ -175,6 +183,7 @@ fn Workspace() -> dioxus::prelude::Element {
         })
         .collect::<Vec<_>>();
     rsx! {
+        runtime::frontend_preload::FrontendPreload { key: "{preload}", config: preload.clone() }
         for context in [catalog.session_context] {
           PluginApplication {
             key: "{context}",

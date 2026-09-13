@@ -77,7 +77,7 @@ fn MountedFrontend(
 ) -> Element {
     let mut bridge = use_signal(|| None::<document::Eval>);
     let frame_id = format!("aio-frontend-{}", mount.token);
-    let config = serde_json::json!({ "id": frame_id, "page_id": page_id, "token": mount.token, "src": mount.src, "revision": mount.revision, "generation": mount.generation, "session_context": mount.session_context, "context": mount.context, "assets": mount.assets });
+    let config = serde_json::json!({ "abi": mount.abi, "id": frame_id, "page_id": page_id, "token": mount.token, "src": mount.src, "revision": mount.revision, "generation": mount.generation, "session_context": mount.session_context, "context": mount.context, "assets": mount.assets });
     use_drop(move || {
         if let Some(bridge) = bridge() {
             let _ = bridge.send(serde_json::json!({ "dispose": true }));
@@ -94,7 +94,7 @@ fn MountedFrontend(
             referrerpolicy: "no-referrer",
             onmounted: move |_| {
                 if bridge().is_none() {
-                    let script = if mount.abi == Some(2) { include_str!("frontend_component.js") } else { concat!(include_str!("frontend_cache.js"), "\n", include_str!("frontend_host.js")) };
+                    let script = if mount.abi == Some(2) { concat!(include_str!("frontend_cache.js"), "\n", include_str!("frontend_assets.js"), "\n", include_str!("frontend_component.js")) } else { concat!(include_str!("frontend_cache.js"), "\n", include_str!("frontend_host.js")) };
                     let mut evaluator = document::eval(script);
                     match evaluator.send(config.clone()) {
                         Ok(()) => {

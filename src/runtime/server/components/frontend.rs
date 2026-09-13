@@ -16,6 +16,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use kuchikiki::traits::TendrilSink;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -67,6 +69,16 @@ pub(in crate::runtime::server) async fn mount(
         .await?;
     ensure!(bundle.digest() == revision, "插件安装版本发生变化");
     let entry = page.entry;
+    let assets = bundle
+        .frontend_files()
+        .filter(|(path, _)| *path != entry)
+        .map(|(path, bytes)| (path.to_owned(), format!("{:x}", Sha256::digest(bytes))))
+        .collect::<BTreeMap<_, _>>();
+    let asset_sizes = bundle
+        .frontend_files()
+        .filter(|(path, _)| *path != entry)
+        .map(|(path, bytes)| (path.to_owned(), bytes.len()))
+        .collect();
     let token = state.frontend.issue(FrontendGrant {
         cookie: headers
             .get(header::COOKIE)
@@ -81,7 +93,7 @@ pub(in crate::runtime::server) async fn mount(
         revision: revision.clone(),
         entry: entry.clone(),
         frontend_path: bundle.manifest().plugin.frontend.path.clone(),
-        assets: Default::default(),
+        assets: assets.clone(),
         issued: Instant::now(),
     })?;
     Ok(MountResponse {
@@ -91,7 +103,8 @@ pub(in crate::runtime::server) async fn mount(
         generation,
         session_context: session_context(session),
         context: tenant_context(session)?,
-        assets: Default::default(),
+        assets,
+        asset_sizes,
         abi: Some(2),
     })
 }
@@ -146,15 +159,19 @@ pub(super) async fn asset(
     if bundle.digest() != grant.revision {
         return Err(RuntimeError::forbidden("插件版本已撤销"));
     }
-    let bytes = bundle
-        .frontend(&path)
-        .ok_or_else(|| RuntimeError::not_found("资产不属于当前插件包"))?;
+    let bytes = if path == super::super::frontend_document::MODULES_PATH {
+        super::super::frontend_document::MODULES
+    } else {
+        bundle
+            .frontend(&path)
+            .ok_or_else(|| RuntimeError::not_found("资产不属于当前插件包"))?
+    };
     let prefix = format!(
         "{}/api/runtime/components/assets/{token}/",
         state.frontend.origin
     );
     let bytes = if path == grant.entry {
-        render(bytes, &prefix, &path)?
+        render(bytes, &prefix, &path, &token)?
     } else {
         bytes.to_vec()
     };
@@ -184,14 +201,26 @@ pub(super) async fn asset(
         header::REFERRER_POLICY,
         HeaderValue::from_static("no-referrer"),
     );
-    headers.insert(header::CONTENT_SECURITY_POLICY,HeaderValue::from_str(&format!("sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' {prefix}; connect-src {prefix} blob:; style-src 'unsafe-inline' {prefix}; img-src data: blob: {prefix}; font-src data: {prefix}; object-src 'none'; frame-src 'none'; worker-src blob:; base-uri {prefix}; form-action 'none'; frame-ancestors 'self'"))?);
+    headers.insert(header::CONTENT_SECURITY_POLICY,HeaderValue::from_str(&format!("sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: {prefix}; connect-src {prefix} blob:; style-src 'unsafe-inline' {prefix}; img-src data: blob: {prefix}; font-src data: {prefix}; object-src 'none'; frame-src 'none'; worker-src blob:; base-uri {prefix}; form-action 'none'; frame-ancestors 'self'"))?);
     Ok(response)
 }
 
-fn render(bytes: &[u8], prefix: &str, entry: &str) -> Result<Vec<u8>> {
+fn render(bytes: &[u8], prefix: &str, entry: &str, token: &str) -> Result<Vec<u8>> {
     let document = kuchikiki::parse_html()
         .one(std::str::from_utf8(bytes)?)
         .document_node;
+    for script in document
+        .select("script[type='module'], script[type='importmap']")
+        .map_err(|_| anyhow::anyhow!("解析模块入口失败"))?
+    {
+        let mut attributes = script.attributes.borrow_mut();
+        let kind = if attributes.get("type") == Some("module") {
+            "module-shim"
+        } else {
+            "importmap-shim"
+        };
+        attributes.insert("type", kind.to_owned());
+    }
     for node in document
         .select("base")
         .map_err(|_| anyhow::anyhow!("解析 HTML 失败"))?
@@ -221,16 +250,36 @@ fn render(bytes: &[u8], prefix: &str, entry: &str) -> Result<Vec<u8>> {
         .one("<script></script>")
         .document_node
         .select_first("script")
-        .map_err(|_| anyhow::anyhow!("创建 SDK 脚本失败"))?
-        .as_node()
-        .clone();
+        .map_err(|_| anyhow::anyhow!("创建 SDK 脚本失败"))?;
+    script
+        .attributes
+        .borrow_mut()
+        .insert("data-token", token.to_owned());
+    script
+        .attributes
+        .borrow_mut()
+        .insert("data-root", prefix.to_owned());
+    let script = script.as_node().clone();
     script.detach();
     for source in [
         az_plugin_runtime::FRONTEND_WASM,
         az_plugin_runtime::FRONTEND_GUEST,
+        include_str!("frontend_assets.js"),
     ] {
         script.append(kuchikiki::NodeRef::new_text(source));
     }
+    let loader = kuchikiki::parse_html()
+        .one("<script></script>")
+        .document_node
+        .select_first("script")
+        .map_err(|_| anyhow::anyhow!("创建模块加载器失败"))?;
+    loader.attributes.borrow_mut().insert(
+        "src",
+        format!("{prefix}{}", super::super::frontend_document::MODULES_PATH),
+    );
+    let loader = loader.as_node().clone();
+    loader.detach();
+    head.prepend(loader);
     head.prepend(script);
     head.prepend(node);
     let mut output = Vec::new();
@@ -248,6 +297,7 @@ mod tests {
             b"<html><head><script type='module' src='app.mjs'></script></head><body></body></html>",
             "https://aio.test/assets/ticket/",
             "index.html",
+            "ticket",
         )?;
         let document = kuchikiki::parse_html()
             .one(String::from_utf8(output)?)
@@ -256,16 +306,33 @@ mod tests {
             .select("script")
             .map_err(|_| anyhow::anyhow!("script selector failed"))?
             .collect::<Vec<_>>();
-        assert_eq!(scripts.len(), 2);
+        assert_eq!(scripts.len(), 3);
         assert_eq!(
             scripts[0].text_contents(),
             format!(
-                "{}{}",
+                "{}{}{}",
                 az_plugin_runtime::FRONTEND_WASM,
-                az_plugin_runtime::FRONTEND_GUEST
+                az_plugin_runtime::FRONTEND_GUEST,
+                include_str!("frontend_assets.js")
             )
         );
-        assert_eq!(scripts[1].attributes.borrow().get("src"), Some("app.mjs"));
+        assert_eq!(
+            scripts[0].attributes.borrow().get("data-root"),
+            Some("https://aio.test/assets/ticket/")
+        );
+        assert_eq!(
+            scripts[0].attributes.borrow().get("data-token"),
+            Some("ticket")
+        );
+        assert_eq!(
+            scripts[1].attributes.borrow().get("src"),
+            Some("https://aio.test/assets/ticket/__aio_modules.js")
+        );
+        assert_eq!(scripts[2].attributes.borrow().get("src"), Some("app.mjs"));
+        assert_eq!(
+            scripts[2].attributes.borrow().get("type"),
+            Some("module-shim")
+        );
         Ok(())
     }
 }

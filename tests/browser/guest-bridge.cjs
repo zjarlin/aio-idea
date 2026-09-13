@@ -7,9 +7,10 @@ test('JSON bridge preserves HTTP errors, payloads and empty responses', async ()
   let receive;
   let outgoing;
   const parent = { postMessage(value) { outgoing = value; } };
-  const window = {};
+  const window = { fetch() {} };
   vm.runInNewContext(fs.readFileSync('src/runtime/server/frontend_guest.js', 'utf8'), {
-    document: { currentScript: { dataset: { token: 'mount' } } },
+    document: { currentScript: { dataset: { token: 'mount' }, src: 'https://aio.test/api/runtime/frontend/assets/mount/__aio_bridge.js' } },
+    URL, Request, Response, MutationObserver: class { observe() {} },
     window, parent, setTimeout, clearTimeout,
     addEventListener(type, callback) { if (type === 'message') receive = callback; },
   });
@@ -29,9 +30,10 @@ test('JSON bridge preserves HTTP errors, payloads and empty responses', async ()
 test('visibility events are scoped to the parent and mount and can unsubscribe', () => {
   let receive;
   const parent = {};
-  const window = {};
+  const window = { fetch() {} };
   vm.runInNewContext(fs.readFileSync('src/runtime/server/frontend_guest.js', 'utf8'), {
-    document: { currentScript: { dataset: { token: 'mount' } } },
+    document: { currentScript: { dataset: { token: 'mount' }, src: 'https://aio.test/api/runtime/frontend/assets/mount/__aio_bridge.js' } },
+    URL, Request, Response, MutationObserver: class { observe() {} },
     window, parent, setTimeout, clearTimeout,
     addEventListener(type, callback) { if (type === 'message') receive = callback; },
   });

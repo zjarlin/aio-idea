@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, sync::Arc};
 pub(super) struct FrontendPackage {
     pub path: String,
     pub assets: BTreeMap<String, String>,
+    pub asset_sizes: BTreeMap<String, usize>,
 }
 
 pub(super) async fn prepare(
@@ -39,11 +40,21 @@ pub(super) async fn prepare(
         package.rev == revision && package.frontend.contains_key(entry),
         "前端入口与活动版本不一致"
     );
-    let manifest = package.verify()?.manifest;
-    let path = manifest.plugin.frontend.context("插件未声明前端产物")?.path;
+    let verified = package.verify()?;
+    let path = verified
+        .manifest
+        .plugin
+        .frontend
+        .context("插件未声明前端产物")?
+        .path;
     state.repository.stage_publish(&package).await?;
     let metadata = Arc::new(FrontendPackage {
         path,
+        asset_sizes: verified
+            .frontend
+            .into_iter()
+            .map(|(path, bytes)| (path, bytes.len()))
+            .collect(),
         assets: package
             .frontend
             .into_iter()

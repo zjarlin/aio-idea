@@ -9,6 +9,7 @@ const active = () => !page || page.dataset.aioWorkspaceActive !== 'false';
 let disposed = false;
 let renewing = false;
 const pending = new Set();
+const assets = mountFrontendAssets(frame, config, active);
 const disposeBridge = mountBridge(frame, async request => {
   if (!active()) throw new Error('租户页面已暂停');
   const body = JSON.stringify({ ...request, body: Array.from(request.body ?? []) });
@@ -32,6 +33,7 @@ const cleanup = () => {
   disposed = true;
   clearInterval(heartbeat);
   disposeBridge();
+  assets.dispose();
   observer.disconnect();
   window.removeEventListener('pagehide', leave);
   for (const request of pending) request.abort();
@@ -39,7 +41,10 @@ const cleanup = () => {
   void fetch(`/api/runtime/frontend/${config.token}`, { method: 'DELETE', credentials: 'same-origin', keepalive: true }).catch(() => {});
 };
 const observer = new MutationObserver(() => {
-  if (!active()) for (const request of pending) request.abort();
+  if (!active()) {
+    assets.abort();
+    for (const request of pending) request.abort();
+  }
 });
 if (page) observer.observe(page, { attributes: true, attributeFilter: ['data-aio-workspace-active'] });
 const leave = event => { if (!event.persisted) cleanup(); };
