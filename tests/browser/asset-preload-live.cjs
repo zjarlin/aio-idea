@@ -65,6 +65,7 @@ async function run() {
       opening = true;
       const before = wasm.length;
       const start = Date.now();
+      const graphReady = page.waitForResponse(response => response.url().endsWith('/request') && response.request().postDataJSON()?.path === '/graph');
       await page.getByRole('navigation', { name: '场景' }).getByRole('button', { name: '社区插件', exact: true }).click();
       const navigation = page.locator('.application-shell__sidebar');
       const memory = navigation.getByRole('button', { name: '记忆图谱', exact: true });
@@ -73,7 +74,9 @@ async function run() {
       const frame = page.frameLocator('iframe[title="记忆图谱"]');
       await frame.locator('canvas').first().waitFor();
       await frame.getByRole('button', { name: '新建记忆', exact: true }).first().waitFor();
-      measurements.push({ mode, readyMs: Date.now() - start, wasmDownloads: wasm.length - before });
+      const paintedMs = Date.now() - start;
+      assert.equal((await (await graphReady).json()).data.status, 200);
+      measurements.push({ mode, paintedMs, readyMs: Date.now() - start, wasmDownloads: wasm.length - before });
       console.log(JSON.stringify(measurements.at(-1)));
       if (!baseline) assert.equal(wasm.length - before, 0, 'Opening downloaded a prewarmed Wasm again');
       for (const [name, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }]]) {

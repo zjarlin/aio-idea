@@ -2,6 +2,8 @@
 
 日期：2026-09-13。正式入口：<https://aio.addzero.site>。
 
+本文记录首次正式接入的发布基线；后续宿主后台资源预热和当前宿主版本见[缓存验收](asset-cache-acceptance.md)，Agent、Memory 安装产物版本未变。
+
 ## 发布结果
 
 智能体与智能体记忆的真实 v2 整包已发布，并在本次登录租户安装启用。智能体使用 Compose UI、Rust 服务和 Pi SDK；记忆使用独立 Wasm Component、PostgreSQL 与宿主密钥。
